@@ -1,0 +1,24 @@
+{
+  "_doc": "Atom-level chirality enum. For proteins, only CHI_OTHER and CHI_S/CHI_R for the alpha carbon occur in practice.",
+  "data": {
+    "chirality_types": [
+      "CHI_UNSPECIFIED",
+      "CHI_TETRAHEDRAL_CW",
+      "CHI_TETRAHEDRAL_CCW",
+      "CHI_SQUAREPLANAR",
+      "CHI_OCTAHEDRAL",
+      "CHI_TRIGONALBIPYRAMIDAL",
+      "CHI_OTHER"
+    ],
+    "chirality_type_ids": {
+      "CHI_UNSPECIFIED": 0,
+      "CHI_TETRAHEDRAL_CW": 1,
+      "CHI_TETRAHEDRAL_CCW": 2,
+      "CHI_SQUAREPLANAR": 3,
+      "CHI_OCTAHEDRAL": 4,
+      "CHI_TRIGONALBIPYRAMIDAL": 5,
+      "CHI_OTHER": 6
+    },
+    "unk_chirality_type": "CHI_OTHER"
+  }
+}

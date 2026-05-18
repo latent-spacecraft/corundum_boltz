@@ -1,0 +1,10 @@
+{
+  "_doc": "num_elements = 128: ref_element is a one-hot of [0..127] atomic number. *_cutoff distances are in angstrom; only relevant for multi-chain interfaces (not used for single-chain protein).",
+  "data": {
+    "num_elements": 128,
+    "atom_interface_cutoff": 5.0,
+    "interface_cutoff": 15.0,
+    "min_coverage_residues": 10,
+    "min_coverage_fraction": 0.1
+  }
+}

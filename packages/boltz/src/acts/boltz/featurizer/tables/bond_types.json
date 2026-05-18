@@ -1,0 +1,22 @@
+{
+  "_doc": "Edge-feature enum for type_bonds tensor. For pure protein (no covalent ligand bonds), only the peptide bond type is used.",
+  "data": {
+    "bond_types": [
+      "OTHER",
+      "SINGLE",
+      "DOUBLE",
+      "TRIPLE",
+      "AROMATIC",
+      "COVALENT"
+    ],
+    "bond_type_ids": {
+      "OTHER": 0,
+      "SINGLE": 1,
+      "DOUBLE": 2,
+      "TRIPLE": 3,
+      "AROMATIC": 4,
+      "COVALENT": 5
+    },
+    "unk_bond_type": "OTHER"
+  }
+}

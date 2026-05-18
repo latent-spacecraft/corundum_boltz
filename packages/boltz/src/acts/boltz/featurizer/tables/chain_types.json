@@ -1,0 +1,17 @@
+{
+  "_doc": "Polymer-type ids. mol_type[token] = chain_type_ids[chain_type_of_chain]. For single-chain protein, mol_type is all the same value.",
+  "data": {
+    "chain_types": [
+      "PROTEIN",
+      "DNA",
+      "RNA",
+      "NONPOLYMER"
+    ],
+    "chain_type_ids": {
+      "PROTEIN": 0,
+      "DNA": 1,
+      "RNA": 2,
+      "NONPOLYMER": 3
+    }
+  }
+}

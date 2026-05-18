@@ -1,0 +1,6 @@
+{
+  "_doc": "Atom-name aliases (e.g. OG / OG1, OD1 / OD2 for ASP/ASN). TS featurizer canonicalises to the first form in each pair before looking up atom indices.",
+  "data": {
+    "UNK": "*"
+  }
+}

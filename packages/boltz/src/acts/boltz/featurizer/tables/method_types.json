@@ -1,0 +1,30 @@
+{
+  "_doc": "One-hot for the 'method_feature' tensor. For browser inference with no experimental method context, use the 'other' or 'na' id.",
+  "data": {
+    "method_types_ids": {
+      "md": 0,
+      "x-ray diffraction": 1,
+      "electron microscopy": 2,
+      "solution nmr": 3,
+      "solid-state nmr": 4,
+      "neutron diffraction": 4,
+      "electron crystallography": 4,
+      "fiber diffraction": 4,
+      "powder diffraction": 4,
+      "infrared spectroscopy": 4,
+      "fluorescence transfer": 4,
+      "epr": 4,
+      "theoretical model": 4,
+      "solution scattering": 4,
+      "other": 4,
+      "afdb": 5,
+      "boltz-1": 6,
+      "future1": 7,
+      "future2": 8,
+      "future3": 9,
+      "future4": 10,
+      "future5": 11
+    },
+    "num_method_types": 12
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "corundum",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Browser-native AI inference for the life sciences.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=packages/boltz",
+    "build": "npm run build --workspace=packages/boltz",
+    "preview": "npm run preview --workspace=packages/boltz"
+  }
+}
