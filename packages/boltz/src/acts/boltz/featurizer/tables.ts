@@ -13,12 +13,20 @@
 
 import tokensJson from './tables/tokens.json'
 import topologyJson from './tables/residue_topology_protein.json'
+import topologyRnaJson from './tables/residue_topology_rna.json'
+import topologyDnaJson from './tables/residue_topology_dna.json'
+import nucleicConstantsJson from './tables/nucleic_constants.json'
 import atomMapsJson from './tables/atom_maps.json'
 import chainTypesJson from './tables/chain_types.json'
 import chiralityJson from './tables/chirality.json'
 import methodTypesJson from './tables/method_types.json'
 import bondTypesJson from './tables/bond_types.json'
 import geometryJson from './tables/geometry_constants.json'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chain type
+
+export type ChainType = 'protein' | 'rna' | 'dna'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // tokens.json
@@ -33,24 +41,46 @@ interface TokensTable {
 
 const tokensData = (tokensJson as unknown as TokensTable).data
 
+interface NucleicConstantsTable {
+  data: {
+    rna_letter_to_token: Record<string, string>
+    rna_token_to_letter: Record<string, string>
+    dna_letter_to_token: Record<string, string>
+    dna_token_to_letter: Record<string, string>
+    nucleic_backbone_atom_names: string[]
+    nucleic_backbone_atom_index: Record<string, number>
+  }
+}
+
+const nucleicData = (nucleicConstantsJson as unknown as NucleicConstantsTable).data
+
 /** Number of token classes (33 in current Boltz-2). */
 export const NUM_TOKENS: number = tokensData.tokens.length
 
-/** Boltz residue-type token id from a single-letter AA code (e.g. 'A' → ALA id). */
-export function letterToTokenId(letter: string): number {
-  const tok = tokensData.prot_letter_to_token[letter.toUpperCase()]
-  if (tok === undefined) {
-    // Per spec gotchas: any unknown letter maps to UNK.
-    return tokensData.token_ids['UNK']
-  }
+/**
+ * Boltz residue-type token id from a single-letter code, dispatched by chain
+ * type. Protein 'A' → ALA, RNA 'A' → A, DNA 'A' → DA. Unknown letters fall
+ * back to the chain's "unknown" token (UNK / N / DN).
+ */
+export function letterToTokenId(letter: string, chainType: ChainType = 'protein'): number {
+  const tok = letterToResName(letter, chainType)
   const id = tokensData.token_ids[tok]
-  if (id === undefined) throw new Error(`tokens.json missing id for ${tok}`)
-  return id
+  if (id !== undefined) return id
+  const fallback = chainType === 'protein' ? 'UNK' : chainType === 'rna' ? 'N' : 'DN'
+  return tokensData.token_ids[fallback]
 }
 
-/** Boltz 3-letter residue name from a single-letter AA code (UNK fallback). */
-export function letterToResName(letter: string): string {
-  return tokensData.prot_letter_to_token[letter.toUpperCase()] ?? 'UNK'
+/** Boltz residue name (3-letter for protein/DNA, 1-letter for RNA) from input letter. */
+export function letterToResName(letter: string, chainType: ChainType = 'protein'): string {
+  const upper = letter.toUpperCase()
+  switch (chainType) {
+    case 'protein':
+      return tokensData.prot_letter_to_token[upper] ?? 'UNK'
+    case 'rna':
+      return nucleicData.rna_letter_to_token[upper] ?? 'N'
+    case 'dna':
+      return nucleicData.dna_letter_to_token[upper] ?? 'DN'
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,14 +124,22 @@ interface TopologyTable {
 }
 
 const topologyData = (topologyJson as unknown as TopologyTable).data
+const topologyDataRna = (topologyRnaJson as unknown as TopologyTable).data
+const topologyDataDna = (topologyDnaJson as unknown as TopologyTable).data
 
-export function residueTopology(resName: string): ResidueTopology {
-  const t = topologyData[resName]
-  if (!t) {
-    const fallback = topologyData['UNK']
-    if (!fallback) throw new Error(`Topology missing for ${resName} and no UNK fallback`)
-    return fallback
+export function residueTopology(
+  resName: string,
+  chainType: ChainType = 'protein',
+): ResidueTopology {
+  let table: Record<string, ResidueTopology>
+  let fallback: string
+  switch (chainType) {
+    case 'protein': table = topologyData;    fallback = 'UNK'; break
+    case 'rna':     table = topologyDataRna; fallback = 'N';   break
+    case 'dna':     table = topologyDataDna; fallback = 'DN';  break
   }
+  const t = table[resName] ?? table[fallback]
+  if (!t) throw new Error(`Topology missing for ${resName} (chain type ${chainType})`)
   return t
 }
 
@@ -114,6 +152,16 @@ interface ChainTypesTable {
 
 const chainTypes = (chainTypesJson as unknown as ChainTypesTable).data
 export const PROTEIN_CHAIN_TYPE_ID: number = chainTypes.chain_type_ids['PROTEIN']
+export const RNA_CHAIN_TYPE_ID: number     = chainTypes.chain_type_ids['RNA']
+export const DNA_CHAIN_TYPE_ID: number     = chainTypes.chain_type_ids['DNA']
+
+export function chainTypeId(type: ChainType): number {
+  switch (type) {
+    case 'protein': return PROTEIN_CHAIN_TYPE_ID
+    case 'rna':     return RNA_CHAIN_TYPE_ID
+    case 'dna':     return DNA_CHAIN_TYPE_ID
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // atom_maps.json (informational; topology already carries center/disto idx)
@@ -192,11 +240,15 @@ export const NUM_ELEMENTS: number = geometryData.num_elements
 export const ATOM_WINDOW_W = 32
 
 /**
- * Per protein_backbone_atom_names = ["N", "CA", "C", "O"] (length 4) +
- * nucleic_backbone_atom_names (length 12) + 1 "off the list" channel
- * (the +1 in SPEC.md = 4 + 12 + 1 = 17).
+ * atom_backbone_feat one-hot layout:
+ *   channel 0 = sidechain / off-list (any atom that isn't a tracked backbone)
+ *   channels 1..4   = protein backbone N, CA, C, O
+ *   channels 5..16  = nucleic backbone P, OP1, OP2, O5', C5', C4', O4', C3', O3', C2', O2', C1'
+ * Total = 1 + 4 + 12 = 17.
  *
- * For protein inputs only the first four indices are ever set.
+ * Index maps below are 0-based offsets *within their group*; the +1 (and
+ * +4 for nucleic) one-hot offset lives in `atomBackboneChannel()` to keep
+ * the source-of-truth alignment with featurizerv2.py easy to read.
  */
 export const PROTEIN_BACKBONE_INDEX: Record<string, number> = {
   N: 0,
@@ -204,4 +256,21 @@ export const PROTEIN_BACKBONE_INDEX: Record<string, number> = {
   C: 2,
   O: 3,
 }
+export const NUCLEIC_BACKBONE_INDEX: Record<string, number> = Object.fromEntries(
+  nucleicData.nucleic_backbone_atom_names.map((name, i) => [name, i]),
+)
 export const ATOM_BACKBONE_FEAT_DIM = 17
+
+/**
+ * Return the atom_backbone_feat one-hot channel for `atomName` on a chain of
+ * `chainType`. 0 if the atom is not on the chain's backbone list.
+ */
+export function atomBackboneChannel(atomName: string, chainType: ChainType): number {
+  if (chainType === 'protein') {
+    const idx = PROTEIN_BACKBONE_INDEX[atomName]
+    return idx !== undefined ? idx + 1 : 0
+  }
+  // RNA + DNA share the 12-atom nucleic backbone vocabulary.
+  const idx = NUCLEIC_BACKBONE_INDEX[atomName]
+  return idx !== undefined ? idx + 5 : 0
+}

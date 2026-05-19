@@ -11,3 +11,4 @@ dist
 .tsbuildinfo
 coverage
 *.log
+*.bak

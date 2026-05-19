@@ -7,17 +7,21 @@
  *
  * Inputs are decoded from the captured feats tensors:
  *   - `atom_pad_mask[A]`             : 1 for real atoms, 0 for padding
- *   - `atom_to_token[A, N]`          : one-hot per atom → residue index
+ *   - `atom_to_token[A, N]`          : one-hot per atom → global token index
+ *   - `asym_id[N]`                   : chain index per token (0-based, parallel to `chains`)
+ *   - `residue_index[N]`             : position within chain per token (0-based)
+ *   - `entity_id[N]`                 : entity index per token (homomers share)
  *   - `ref_atom_name_chars[A, 4, 64]`: one-hot per atom × 4 chars × 64 ascii values
  *   - `ref_element[A, 128]`          : one-hot per atom → atomic number
  *
  * Coordinates are `[A * 3]` (single batch). pLDDT is per-residue `[N]` in [0, 100].
  *
- * Residue identity comes from the sequence string the caller supplies (single
- * chain). Chain ID is hard-coded to 'A' for v0.1.
+ * Each chain gets a distinct label/auth_asym_id letter (A, B, C, …). Beyond
+ * 26 chains we fall through to two-letter codes (AA, AB, …).
  */
 import { argmaxLast, type Rng as _Rng } from './math'
 import type { FeatsBundle, FeatsTensor } from './featsLoader'
+import type { ChainType } from './featurizer'
 
 /**
  * Coerce a feats-tensor backing store into a plain numeric ArrayLike.
@@ -35,12 +39,26 @@ function asNumberArray(t: FeatsTensor): ArrayLike<number> {
   return d as ArrayLike<number>
 }
 
-const THREE_LETTER: Record<string, string> = {
+const PROTEIN_THREE_LETTER: Record<string, string> = {
   A: 'ALA', R: 'ARG', N: 'ASN', D: 'ASP', C: 'CYS',
   E: 'GLU', Q: 'GLN', G: 'GLY', H: 'HIS', I: 'ILE',
   L: 'LEU', K: 'LYS', M: 'MET', F: 'PHE', P: 'PRO',
   S: 'SER', T: 'THR', W: 'TRP', Y: 'TYR', V: 'VAL',
   X: 'UNK', B: 'ASX', Z: 'GLX', U: 'SEC', O: 'PYL',
+}
+
+// PDB nomenclature: RNA residues are 1-letter codes (A, G, C, U, N).
+// DNA residues are 2-letter codes prefixed with 'D' (DA, DG, DC, DT, DN).
+const RNA_RESIDUE: Record<string, string> = { A: 'A', G: 'G', C: 'C', U: 'U', N: 'N' }
+const DNA_RESIDUE: Record<string, string> = { A: 'DA', G: 'DG', C: 'DC', T: 'DT', N: 'DN' }
+
+function residueLabel(letter: string, type: ChainType): string {
+  const upper = letter.toUpperCase()
+  switch (type) {
+    case 'protein': return PROTEIN_THREE_LETTER[upper] ?? 'UNK'
+    case 'rna':     return RNA_RESIDUE[upper] ?? 'N'
+    case 'dna':     return DNA_RESIDUE[upper] ?? 'DN'
+  }
 }
 
 const ATOMIC_NUMBER_TO_SYMBOL: string[] = [
@@ -77,18 +95,42 @@ function decodeAtomName(charsOneHot: ArrayLike<number>, a: number): string {
   return out.trim()
 }
 
+/** Excel-column-style chain letter: 0→A, 25→Z, 26→AA, 27→AB, … */
+function chainLetter(asymIdx: number): string {
+  let n = asymIdx
+  let out = ''
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out
+    n = Math.floor(n / 26) - 1
+  } while (n >= 0)
+  return out
+}
+
+/** Per-chain sequence/name/type fed to the writer. Compatible with ParsedChain. */
+export interface MmcifChain {
+  sequence: string
+  type: ChainType
+  name?: string
+}
+
 /**
  * Build an mmCIF string from the prediction outputs + the feats that defined
  * what each atom is. pLDDT is per-residue, [0, 100] scale.
+ *
+ * `chains` is the same list passed to the featurizer (one entry per asym_id,
+ * in the same order). Its only role here is supplying the 1-letter residue
+ * codes needed for `label_comp_id` — every other multi-chain detail comes
+ * from the feats tensors so the writer stays in sync with whatever the
+ * featurizer produced.
  */
 export function writeMmcif(opts: {
   feats: FeatsBundle
   atomCoords: Float32Array     // [A * 3]
   plddt: Float32Array          // [N]
-  sequence: string             // length N
+  chains: MmcifChain[]
   modelId?: string
 }): string {
-  const { feats, atomCoords, plddt, sequence } = opts
+  const { feats, atomCoords, plddt, chains } = opts
   const id = opts.modelId ?? 'predicted'
   const A = feats.A
   const N = feats.N
@@ -97,22 +139,21 @@ export function writeMmcif(opts: {
   const atomToTokenT = feats.tensors['atom_to_token']
   const refElement = feats.tensors['ref_element']
   const refAtomNameChars = feats.tensors['ref_atom_name_chars']
+  const asymIdT = feats.tensors['asym_id']
+  const entityIdT = feats.tensors['entity_id']
+  const residueIndexT = feats.tensors['residue_index']
 
-  // atom_pad_mask dtype is float32 in our featurizer; treat any storage as
-  // a numeric ArrayLike so `!atomPadMask[a]` works regardless.
   const atomPadMask = asNumberArray(atomPadMaskT)
-
-  // atom_to_token shape [A, N], one-hot along last dim → residue index per atom.
   const atomResidue = argmaxLast(asNumberArray(atomToTokenT), N)
 
-  // ref_element [A, K_elem] one-hot → atomic number.
   const elementDim = refElement.shape[refElement.shape.length - 1]
   const atomicNum = argmaxLast(asNumberArray(refElement), elementDim)
 
-  // ref_atom_name_chars [A, 4, 64] one-hot over ASCII offset.
   const charBuf = asNumberArray(refAtomNameChars)
+  const asymId = asNumberArray(asymIdT)
+  const entityId = asNumberArray(entityIdT)
+  const residueIndex = asNumberArray(residueIndexT)
 
-  // Build the loop.
   const lines: string[] = []
   lines.push(`data_${id}`)
   lines.push('_entry.id ' + id)
@@ -139,18 +180,25 @@ export function writeMmcif(opts: {
   let serial = 0
   for (let a = 0; a < A; a++) {
     if (!atomPadMask[a]) continue
+    const tokenIdx = atomResidue[a]
+    if (tokenIdx < 0 || tokenIdx >= N) continue
     serial++
-    const residueIdx = atomResidue[a]
-    if (residueIdx < 0 || residueIdx >= N) continue
-    const aaLetter = sequence[residueIdx] ?? 'X'
-    const compId = THREE_LETTER[aaLetter] ?? 'UNK'
-    const seqId = residueIdx + 1
+    const asym = asymId[tokenIdx] | 0
+    const entity = entityId[tokenIdx] | 0
+    const resInChain = residueIndex[tokenIdx] | 0
+    const chain = chains[asym]
+    const aaLetter = chain?.sequence[resInChain] ?? 'X'
+    const compId = chain ? residueLabel(aaLetter, chain.type) : 'UNK'
+    const seqId = resInChain + 1
+    const chainCode = chainLetter(asym)
+    // mmCIF entity_id is 1-based per the spec.
+    const entityCode = entity + 1
     const element = atomicNumberToSymbol(atomicNum[a])
     const atomName = decodeAtomName(charBuf, a) || element
     const x = atomCoords[a * 3]
     const y = atomCoords[a * 3 + 1]
     const z = atomCoords[a * 3 + 2]
-    const b = plddt[residueIdx]
+    const b = plddt[tokenIdx]
     const occupancy = 1.0
     lines.push(
       [
@@ -160,8 +208,8 @@ export function writeMmcif(opts: {
         atomName,
         '.',
         compId,
-        'A',
-        '1',
+        chainCode,
+        entityCode,
         seqId,
         '?',
         x.toFixed(3),
@@ -170,7 +218,7 @@ export function writeMmcif(opts: {
         occupancy.toFixed(2),
         b.toFixed(2),
         seqId,
-        'A',
+        chainCode,
         '1',
       ].join(' '),
     )

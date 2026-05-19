@@ -1,0 +1,61 @@
+{
+  "_doc": "Nucleic featurization constants. Letter\u2194token maps for RNA (identity: A\u2192A, G\u2192G, C\u2192C, U\u2192U, N\u2192N) and DNA (prefix-d: A\u2192DA, \u2026, T\u2192DT, N\u2192DN). nucleic_backbone_atom_names defines the 12-atom vocabulary that lights up atom_backbone_feat channels 5..16 (protein N/CA/C/O occupy channels 1..4).",
+  "data": {
+    "rna_letter_to_token": {
+      "A": "A",
+      "G": "G",
+      "C": "C",
+      "U": "U",
+      "N": "N"
+    },
+    "rna_token_to_letter": {
+      "A": "A",
+      "G": "G",
+      "C": "C",
+      "U": "U",
+      "N": "N"
+    },
+    "dna_letter_to_token": {
+      "A": "DA",
+      "G": "DG",
+      "C": "DC",
+      "T": "DT",
+      "N": "DN"
+    },
+    "dna_token_to_letter": {
+      "DA": "A",
+      "DG": "G",
+      "DC": "C",
+      "DT": "T",
+      "DN": "N"
+    },
+    "nucleic_backbone_atom_names": [
+      "P",
+      "OP1",
+      "OP2",
+      "O5'",
+      "C5'",
+      "C4'",
+      "O4'",
+      "C3'",
+      "O3'",
+      "C2'",
+      "O2'",
+      "C1'"
+    ],
+    "nucleic_backbone_atom_index": {
+      "P": 0,
+      "OP1": 1,
+      "OP2": 2,
+      "O5'": 3,
+      "C5'": 4,
+      "C4'": 5,
+      "O4'": 6,
+      "C3'": 7,
+      "O3'": 8,
+      "C2'": 9,
+      "O2'": 10,
+      "C1'": 11
+    }
+  }
+}

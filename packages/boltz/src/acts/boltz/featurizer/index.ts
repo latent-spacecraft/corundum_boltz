@@ -13,20 +13,80 @@
  */
 
 import type { FeatsBundle, FeatsTensor, FeatsDtype } from '../featsLoader'
+export { parseFasta, detectType, type ParsedChain } from './parseFasta'
+export type { ChainType } from './tables'
 import { makeRng, randomRotation, randomTranslation } from '../math'
 import {
   ATOM_BACKBONE_FEAT_DIM,
   ATOM_WINDOW_W,
   BOND_TYPE_SINGLE_ID,
+  type ChainType,
+  atomBackboneChannel,
+  chainTypeId,
   letterToResName,
   letterToTokenId,
   METHOD_TYPE_OTHER_ID,
   NUM_ELEMENTS,
   NUM_TOKENS,
-  PROTEIN_BACKBONE_INDEX,
-  PROTEIN_CHAIN_TYPE_ID,
   residueTopology,
 } from './tables'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chain input model
+//
+// The featurizer is parameterised over a list of entities. A "chain" here is
+// one polymer (Phase 1: protein only). Single-sequence callers go through the
+// `featurize(sequence)` wrapper at the bottom of this file, which packages
+// the input as a single-element chain list. Multi-chain callers use
+// `featurizeChains(chains)` directly.
+
+export interface ChainInput {
+  /** Raw sequence text. 1-letter codes for protein/RNA/DNA. Whitespace stripped. */
+  sequence: string
+  /** Entity type. Protein, RNA, or DNA. */
+  type: ChainType
+}
+
+interface ChainMeta {
+  /** asym_id — unique 0-based index per chain in order of appearance. */
+  asymId: number
+  /** entity_id — chains with identical (type, sequence) share this id. */
+  entityId: number
+  /** sym_id — 0-based index within an entity group (NCS copy number). */
+  symId: number
+  /** mol_type token id, derived from chain type. */
+  molTypeId: number
+  /** Original chain type — needed downstream for topology / backbone lookups. */
+  type: ChainType
+}
+
+function assignChainMeta(chains: ChainInput[]): ChainMeta[] {
+  const entityIdByKey = new Map<string, number>()
+  const symCounterByEntity = new Map<number, number>()
+  const out: ChainMeta[] = []
+  for (let i = 0; i < chains.length; i++) {
+    const c = chains[i]
+    if (c.type !== 'protein' && c.type !== 'rna' && c.type !== 'dna') {
+      throw new Error(`Unsupported chain type: ${c.type}`)
+    }
+    const key = `${c.type}:${c.sequence}`
+    let entityId = entityIdByKey.get(key)
+    if (entityId === undefined) {
+      entityId = entityIdByKey.size
+      entityIdByKey.set(key, entityId)
+    }
+    const sym = symCounterByEntity.get(entityId) ?? 0
+    symCounterByEntity.set(entityId, sym + 1)
+    out.push({
+      asymId: i,
+      entityId,
+      symId: sym,
+      molTypeId: chainTypeId(c.type),
+      type: c.type,
+    })
+  }
+  return out
+}
 
 /**
  * Apply per-residue centering + Haar rotation + N(0, s_trans) translation
@@ -89,6 +149,7 @@ function augmentRefPosPerResidue(
 // Atom enumeration
 
 interface AtomEntry {
+  /** Global token index (0..N-1 across all chains). Used for ref_space_uid and atom_to_token. */
   residueIdx: number
   /** Original index into the topology's `atoms[]` list (load-bearing for center/disto/backbone maps). */
   atomOrigIdx: number
@@ -99,56 +160,76 @@ interface AtomEntry {
   refPos: [number, number, number]
 }
 
+interface TokenMeta {
+  /** Owning chain's index into the input list. */
+  chainIdx: number
+  /** Position within the owning chain (0-based, restarts per chain). */
+  residueInChainIdx: number
+  /** Single-letter code for this token (for letterToTokenId / letterToResName). */
+  letter: string
+}
+
 interface AtomEnumeration {
   atoms: AtomEntry[]
-  /** atom indices grouped per residue. `byResidue[n]` lists emitted-atom-indices belonging to residue n. */
+  /** atom indices grouped per global token. `byResidue[n]` lists emitted-atom-indices belonging to token n. */
   byResidue: number[][]
-  /** First emitted atom index for each residue. */
+  /** First emitted atom index for each global token. */
   residueStart: number[]
   /**
-   * Per residue: orig-atom-idx → emitted-atom-idx (or -1 if dropped).
+   * Per token: orig-atom-idx → emitted-atom-idx (or -1 if dropped).
    * Used to translate center/disto/backbone indices through the leaving-atom filter.
    */
   origToEmittedPerResidue: number[][]
+  /** Per-token metadata, length = N (sum of chain lengths). */
+  tokens: TokenMeta[]
+  /** Per-chain metadata, length = chains.length. */
+  chains: ChainMeta[]
 }
 
-function enumerateAtoms(sequence: string): AtomEnumeration {
-  const N = sequence.length
+function enumerateAtoms(chains: ChainInput[]): AtomEnumeration {
+  const chainMeta = assignChainMeta(chains)
   const atoms: AtomEntry[] = []
   const byResidue: number[][] = []
   const residueStart: number[] = []
   const origToEmittedPerResidue: number[][] = []
+  const tokens: TokenMeta[] = []
 
-  for (let n = 0; n < N; n++) {
-    residueStart.push(atoms.length)
-    const indicesHere: number[] = []
-    byResidue.push(indicesHere)
-    const resName = letterToResName(sequence[n])
-    const topo = residueTopology(resName)
-    const map = new Array<number>(topo.atoms.length).fill(-1)
-    origToEmittedPerResidue.push(map)
-    for (let aIdx = 0; aIdx < topo.atoms.length; aIdx++) {
-      const a = topo.atoms[aIdx]
-      // Drop leaving atoms (OXT for proteins) — *every* residue, including
-      // the C-terminal. Empirically matches the v0.1 Python featurizer's
-      // behavior (the SPEC.md said "keep on C-term" but Boltz's own
-      // featurizer flow drops it during the structure-from-sequence path).
-      if (a.leaving) continue
-      map[aIdx] = atoms.length
-      indicesHere.push(atoms.length)
-      atoms.push({
-        residueIdx: n,
-        atomOrigIdx: aIdx,
-        name: a.name,
-        element: a.element,
-        charge: a.charge,
-        chiralityId: a.chirality_id,
-        refPos: a.ref_pos,
-      })
+  for (let c = 0; c < chains.length; c++) {
+    const seq = chains[c].sequence
+    const type = chains[c].type
+    for (let r = 0; r < seq.length; r++) {
+      const globalN = tokens.length
+      tokens.push({ chainIdx: c, residueInChainIdx: r, letter: seq[r] })
+      residueStart.push(atoms.length)
+      const indicesHere: number[] = []
+      byResidue.push(indicesHere)
+      const resName = letterToResName(seq[r], type)
+      const topo = residueTopology(resName, type)
+      const map = new Array<number>(topo.atoms.length).fill(-1)
+      origToEmittedPerResidue.push(map)
+      for (let aIdx = 0; aIdx < topo.atoms.length; aIdx++) {
+        const a = topo.atoms[aIdx]
+        // Drop leaving atoms (OXT for proteins) — *every* residue, including
+        // the C-terminal. Empirically matches the v0.1 Python featurizer's
+        // behavior (the SPEC.md said "keep on C-term" but Boltz's own
+        // featurizer flow drops it during the structure-from-sequence path).
+        if (a.leaving) continue
+        map[aIdx] = atoms.length
+        indicesHere.push(atoms.length)
+        atoms.push({
+          residueIdx: globalN,
+          atomOrigIdx: aIdx,
+          name: a.name,
+          element: a.element,
+          charge: a.charge,
+          chiralityId: a.chirality_id,
+          refPos: a.ref_pos,
+        })
+      }
     }
   }
 
-  return { atoms, byResidue, residueStart, origToEmittedPerResidue }
+  return { atoms, byResidue, residueStart, origToEmittedPerResidue, tokens, chains: chainMeta }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -197,11 +278,29 @@ function fillInt64(t: FeatsTensor, v: bigint): FeatsTensor {
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
 
+/**
+ * Single-sequence convenience wrapper. The previous public API; preserved
+ * verbatim so existing callers (BoltzAct, validate harness, single-chain
+ * golden tests) work unchanged. A single-chain input is byte-identical to
+ * passing a one-element list with chain type 'protein'.
+ */
 export function featurize(sequence: string): FeatsBundle {
   const seq = sequence.replace(/\s+/g, '').toUpperCase()
-  const N = seq.length
-  if (N === 0) throw new Error('Empty sequence')
-  const enum_ = enumerateAtoms(seq)
+  if (seq.length === 0) throw new Error('Empty sequence')
+  return featurizeChains([{ sequence: seq, type: 'protein' }])
+}
+
+export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
+  if (chainsInput.length === 0) throw new Error('No chains')
+  const chains = chainsInput.map((c) => ({
+    ...c,
+    sequence: c.sequence.replace(/\s+/g, '').toUpperCase(),
+  }))
+  for (const c of chains) {
+    if (c.sequence.length === 0) throw new Error('Empty sequence in chain')
+  }
+  const N = chains.reduce((acc, c) => acc + c.sequence.length, 0)
+  const enum_ = enumerateAtoms(chains)
   const A_real = enum_.atoms.length
   const A = Math.ceil(A_real / ATOM_WINDOW_W) * ATOM_WINDOW_W
   const K = A / ATOM_WINDOW_W
@@ -239,21 +338,26 @@ export function featurize(sequence: string): FeatsBundle {
     const tokIdxArr = tokIdx.data as BigInt64Array
     const resIdxArr = resIdx.data as BigInt64Array
     const molTypeArr = molType.data as BigInt64Array
-    const proteinChainTypeBig = BigInt(PROTEIN_CHAIN_TYPE_ID)
+    const asymIdArr = asymId.data as BigInt64Array
+    const entityIdArr = entityId.data as BigInt64Array
+    const symIdArr = symId.data as BigInt64Array
     for (let n = 0; n < N; n++) {
-      const id = letterToTokenId(seq[n])
+      const tok = enum_.tokens[n]
+      const cm = enum_.chains[tok.chainIdx]
+      const id = letterToTokenId(tok.letter, cm.type)
       resTypeArr[n * NUM_TOKENS + id] = 1n
       tokIdxArr[n] = BigInt(n)
-      resIdxArr[n] = BigInt(n)
-      molTypeArr[n] = proteinChainTypeBig
+      // residue_index restarts per chain (Boltz convention — distinct chains
+      // share token_index but have independent residue numbering).
+      resIdxArr[n] = BigInt(tok.residueInChainIdx)
+      molTypeArr[n] = BigInt(cm.molTypeId)
+      asymIdArr[n] = BigInt(cm.asymId)
+      entityIdArr[n] = BigInt(cm.entityId)
+      symIdArr[n] = BigInt(cm.symId)
     }
-    // asym/entity/sym already zero-initialised.
     void cyclicPeriod
     void modified
     void affinityTokenMask
-    void asymId
-    void entityId
-    void symId
 
     add(resType)
     add(tokIdx)
@@ -301,6 +405,7 @@ export function featurize(sequence: string): FeatsBundle {
 
     for (let a = 0; a < A_real; a++) {
       const at = enum_.atoms[a]
+      const ownerType = enum_.chains[enum_.tokens[at.residueIdx].chainIdx].type
       plddtArr[a] = 1
       refPosArr[a * 3]     = at.refPos[0]
       refPosArr[a * 3 + 1] = at.refPos[1]
@@ -318,13 +423,11 @@ export function featurize(sequence: string): FeatsBundle {
         const idx = charCode >= 0 && charCode < 64 ? charCode : 0
         refAtomNameCharsArr[a * 4 * 64 + c * 64 + idx] = 1n
       }
-      // atom_backbone_feat: one-hot. Boltz reserves channel 0 for "not a
-      // backbone atom" *as a positive class* (not a default-zero). Protein
-      // backbone atoms occupy channels 1..4 (N=1, CA=2, C=3, O=4); nucleic
-      // backbone channels follow. Side-chain atoms set channel 0 to 1. See
-      // featurizerv2.py:1245 (`+1` offset) and the subsequent one_hot() call.
-      const bbIdx = PROTEIN_BACKBONE_INDEX[at.name]
-      const channel = bbIdx !== undefined ? bbIdx + 1 : 0
+      // atom_backbone_feat one-hot. Channel 0 = sidechain / off-list.
+      // Protein backbone N/CA/C/O → 1..4, nucleic P/OP1/OP2/O5'/C5'/C4'/O4'/
+      // C3'/O3'/C2'/O2'/C1' → 5..16. Dispatch by chain type so a protein CA
+      // doesn't get confused with the nucleic C-prefixed atoms.
+      const channel = atomBackboneChannel(at.name, ownerType)
       atomBackboneArr[a * ATOM_BACKBONE_FEAT_DIM + channel] = 1n
     }
     // Per-residue ref_pos augmentation. Match featurizerv2.py:1494-1499 —
@@ -373,8 +476,10 @@ export function featurize(sequence: string): FeatsBundle {
     }
 
     for (let n = 0; n < N; n++) {
-      const resName = letterToResName(seq[n])
-      const topo = residueTopology(resName)
+      const tok = enum_.tokens[n]
+      const type = enum_.chains[tok.chainIdx].type
+      const resName = letterToResName(tok.letter, type)
+      const topo = residueTopology(resName, type)
       const map = enum_.origToEmittedPerResidue[n]
       const centerEmitted = map[topo.center_atom_idx]
       const distoEmitted = map[topo.disto_atom_idx]
@@ -467,7 +572,8 @@ export function featurize(sequence: string): FeatsBundle {
     const msaArr = msa.data as BigInt64Array
     const profileArr = profile.data as Float32Array
     for (let n = 0; n < N; n++) {
-      const id = letterToTokenId(seq[n])
+      const tok = enum_.tokens[n]
+      const id = letterToTokenId(tok.letter, enum_.chains[tok.chainIdx].type)
       msaArr[n] = BigInt(id)
       profileArr[n * NUM_TOKENS + id] = 1
     }

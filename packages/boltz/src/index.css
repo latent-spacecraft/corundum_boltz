@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Gallant";
+  src: url("/fonts/gallant.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
  * Corundum palette — neutral, slightly warm, auto light/dark via
  * prefers-color-scheme. Single source of truth for both shadcn semantic
@@ -37,7 +45,7 @@
   --rule: oklch(0.74 0.025 60);
   --oxblood: var(--primary);
   --brass: oklch(0.7 0.11 80);
-  --font-display: "Iowan Old Style", "Hoefler Text", "Georgia", serif;
+  --font-display: "Gallant", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -109,7 +117,19 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: "Gallant", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Retro pixelated rendering for large logotypes and headings.
+ * Gallant is monospaced, so we differentiate purely with size + color;
+ * disabling smoothing on large sizes lets the bitmap-style glyphs read
+ * crisply, while body text keeps subpixel antialiasing for legibility. */
+.font-pixel,
+h1 {
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  font-smooth: never;
+  text-rendering: geometricPrecision;
 }

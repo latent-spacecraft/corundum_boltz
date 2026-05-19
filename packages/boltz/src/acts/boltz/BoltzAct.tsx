@@ -43,8 +43,7 @@ import {
 import { predict, type ProgressEvent } from './orchestrate'
 import { writeMmcif } from './mmcif'
 import { validateAgainstGolden, type ValidationReport } from './featurizer/validate'
-import { featurize } from './featurizer'
-import { firstSequenceFrom } from './fasta'
+import { featurizeChains, parseFasta, type ParsedChain } from './featurizer'
 
 interface BoltzActState {
   structure: StructurePayload | null
@@ -292,11 +291,28 @@ function PredictPanel({
   } | null>(null)
 
   // Parse the FASTA on render so we can preflight length and disable the button.
-  const record = firstSequenceFrom(fasta)
-  const sequence = (record?.sequence ?? '').replace(/[^A-Za-z]/g, '').toUpperCase()
-  const sequenceLabel = record?.header || (sequence ? '(no header)' : '(empty)')
-  const tooShort = sequence.length < 8
-  const tooLong = sequence.length > 1024
+  // Wrapping in try/catch keeps the panel responsive while the user is mid-edit
+  // (the parser throws on empty body / empty header which is fine at submit time
+  // but noisy during typing).
+  let chains: ParsedChain[] = []
+  let parseError: string | null = null
+  try {
+    chains = parseFasta(fasta)
+  } catch (e) {
+    parseError = (e as Error).message
+  }
+  const cleaned = chains.map((c) => ({
+    ...c,
+    sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase(),
+  }))
+  const totalLen = cleaned.reduce((acc, c) => acc + c.sequence.length, 0)
+  const chainSummary = cleaned.length === 0
+    ? '(empty)'
+    : cleaned
+        .map((c) => `${c.name || '(no header)'} · ${c.sequence.length}`)
+        .join('  +  ')
+  const tooShort = totalLen < 8
+  const tooLong = totalLen > 1024
 
   const phaseLabel = (e: ProgressEvent | null) => {
     if (!e) return 'Initialising…'
@@ -318,13 +334,18 @@ function PredictPanel({
         Engine warm · {trunk.executionProvider}.
       </p>
       <div
-        className="flex items-center justify-between font-mono text-[10px] uppercase tracking-widest"
+        className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-widest"
         style={{ color: 'var(--ink-faded)' }}
       >
-        <span title={sequenceLabel}>{sequenceLabel.slice(0, 40)}{sequenceLabel.length > 40 ? '…' : ''}</span>
-        <span>
-          {sequence.length} aa
-          {tooShort && sequence.length > 0 && (
+        <span title={chainSummary} className="truncate">
+          {parseError
+            ? <span style={{ color: 'var(--destructive)' }}>{parseError}</span>
+            : chainSummary}
+        </span>
+        <span className="whitespace-nowrap">
+          {cleaned.length > 1 && <span>{cleaned.length} chains · </span>}
+          {totalLen} res
+          {tooShort && totalLen > 0 && (
             <span style={{ color: 'var(--destructive)' }}> · &lt;8</span>
           )}
           {tooLong && (
@@ -334,14 +355,14 @@ function PredictPanel({
       </div>
       <Button
         variant="outline"
-        disabled={running || tooShort || tooLong}
+        disabled={running || tooShort || tooLong || parseError !== null}
         onClick={async () => {
           setRunning(true)
           setError(null)
           setStats(null)
           setProgress(null)
           try {
-            const feats = featurize(sequence)
+            const feats = featurizeChains(cleaned)
             const result = await predict({
               feats,
               trunk,
@@ -356,7 +377,7 @@ function PredictPanel({
               feats,
               atomCoords: result.atomCoords,
               plddt: result.plddt,
-              sequence,
+              chains: cleaned,
               modelId: 'predicted',
             })
             // Diagnostic: log the first 30 lines + tail of the mmCIF so we
@@ -377,12 +398,15 @@ function PredictPanel({
               )
               console.log('[BoltzAct] mmCIF head:\n' + head + '\n…\n' + tail)
             }
-            const label = record?.header
-              ? record.header.split(/\s+/)[0].slice(0, 24)
+            const labelBase = cleaned[0]?.name
+              ? cleaned[0].name.slice(0, 24)
               : 'unnamed'
+            const label = cleaned.length > 1
+              ? `${labelBase}+${cleaned.length - 1}`
+              : labelBase
             setStructure(
               { data: cif, format: 'mmcif', id: `${label} (predicted)` },
-              `Boltz-2 prediction · ${(result.elapsedMs / 1000).toFixed(1)} s`,
+              `Boltz-2 prediction · ${cleaned.length} chain${cleaned.length > 1 ? 's' : ''} · ${(result.elapsedMs / 1000).toFixed(1)} s`,
             )
             const mean =
               Array.from(result.plddt).reduce((a, b) => a + b, 0) /
@@ -398,7 +422,7 @@ function PredictPanel({
               plddtMin: pMin,
               plddtMax: pMax,
               elapsedMs: result.elapsedMs,
-              residueCount: sequence.length,
+              residueCount: totalLen,
             })
           } catch (err) {
             setError((err as Error).message)
@@ -441,6 +465,18 @@ const EXAMPLE_1CRN = `>1CRN Crambin (46 aa)
 TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN`
 const EXAMPLE_1UBQ = `>1UBQ Ubiquitin (76 aa)
 MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG`
+const EXAMPLE_DIMER = `>chain_a 1L2Y copy A
+NLYIQWLKDGGPSSGRPPPS
+>chain_b 1L2Y copy B
+NLYIQWLKDGGPSSGRPPPS`
+// Classic UUCG tetraloop — a 10-nt RNA hairpin that folds reliably.
+const EXAMPLE_RNA = `>uucg_loop rna
+CGCUUCGGCG`
+// Drew–Dickerson dodecamer: self-complementary B-form DNA duplex.
+const EXAMPLE_DNA = `>strand_a dna
+CGCGAATTCGCG
+>strand_b dna
+CGCGAATTCGCG`
 
 export function BoltzInput() {
   const { fasta, setFasta, setStructure, setError } = useBoltz()
@@ -470,7 +506,7 @@ export function BoltzInput() {
             color: 'var(--ink)',
           }}
         />
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           <button
             type="button"
             onClick={() => setFasta(EXAMPLE_1L2Y)}
@@ -497,6 +533,33 @@ export function BoltzInput() {
             title="Ubiquitin — classic fold benchmark"
           >
             1UBQ · 76 aa
+          </button>
+          <button
+            type="button"
+            onClick={() => setFasta(EXAMPLE_DIMER)}
+            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+            title="1L2Y homodimer — smallest multi-chain target"
+          >
+            Dimer · 2×20
+          </button>
+          <button
+            type="button"
+            onClick={() => setFasta(EXAMPLE_RNA)}
+            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+            title="UUCG tetraloop — small RNA hairpin (10 nt)"
+          >
+            RNA · 10 nt
+          </button>
+          <button
+            type="button"
+            onClick={() => setFasta(EXAMPLE_DNA)}
+            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+            title="Drew–Dickerson dodecamer — B-form DNA duplex (2 × 12 nt)"
+          >
+            DNA · 2×12
           </button>
         </div>
 

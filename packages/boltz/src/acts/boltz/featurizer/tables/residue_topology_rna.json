@@ -1,0 +1,2524 @@
+{
+  "_doc": "Per-residue topology for the 5 RNA token classes (A, G, C, U, N). Extracted from ~/.boltz/mols/<CCD>.pkl via Boltz's const module. Same shape as residue_topology_protein.json. backbone_atom_idx is indexed against nucleic_backbone_atom_names (12 entries: P, OP1, OP2, O5', C5', C4', O4', C3', O3', C2', O2', C1'), which align with atom_backbone_feat channels 5..16. center/disto atom is C1'.",
+  "data": {
+    "A": {
+      "atoms": [
+        {
+          "name": "OP3",
+          "alt_name": "O3P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": true,
+          "ref_pos": [
+            -5.388218879699707,
+            1.0552401542663574,
+            0.9122916460037231
+          ]
+        },
+        {
+          "name": "P",
+          "alt_name": "P",
+          "element": 15,
+          "element_sym": "P",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.787870407104492,
+            -0.5199419856071472,
+            0.7517016530036926
+          ]
+        },
+        {
+          "name": "OP1",
+          "alt_name": "O1P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -5.936474800109863,
+            -1.462230920791626,
+            0.4721483290195465
+          ]
+        },
+        {
+          "name": "OP2",
+          "alt_name": "O2P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.028154373168945,
+            -0.9856244921684265,
+            2.191192626953125
+          ]
+        },
+        {
+          "name": "O5'",
+          "alt_name": "O5*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.680521249771118,
+            -0.5981424450874329,
+            -0.5417137145996094
+          ]
+        },
+        {
+          "name": "C5'",
+          "alt_name": "C5*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.6267757415771484,
+            0.2971908748149872,
+            -0.27462801337242126
+          ]
+        },
+        {
+          "name": "C4'",
+          "alt_name": "C4*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -1.5940971374511719,
+            0.22063204646110535,
+            -1.403402328491211
+          ]
+        },
+        {
+          "name": "O4'",
+          "alt_name": "O4*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.5680376291275024,
+            1.1648606061935425,
+            -1.1716771125793457
+          ]
+        },
+        {
+          "name": "C3'",
+          "alt_name": "C3*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -0.9645088315010071,
+            -1.1722302436828613,
+            -1.520321249961853
+          ]
+        },
+        {
+          "name": "O3'",
+          "alt_name": "O3*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.6344387531280518,
+            -2.024040699005127,
+            -2.42100191116333
+          ]
+        },
+        {
+          "name": "C2'",
+          "alt_name": "C2*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            0.4571850895881653,
+            -0.8673996925354004,
+            -1.9267030954360962
+          ]
+        },
+        {
+          "name": "O2'",
+          "alt_name": "O2*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            0.6225394010543823,
+            -0.8298889994621277,
+            -3.326211929321289
+          ]
+        },
+        {
+          "name": "C1'",
+          "alt_name": "C1*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CCW",
+          "chirality_id": 2,
+          "leaving": false,
+          "ref_pos": [
+            0.681070864200592,
+            0.5124294757843018,
+            -1.30133855342865
+          ]
+        },
+        {
+          "name": "N9",
+          "alt_name": "N9",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.3128042221069336,
+            0.3832521438598633,
+            0.01483562495559454
+          ]
+        },
+        {
+          "name": "C8",
+          "alt_name": "C8",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            0.941541314125061,
+            1.0613151788711548,
+            1.235790729522705
+          ]
+        },
+        {
+          "name": "N7",
+          "alt_name": "N7",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.8685797452926636,
+            1.0896625518798828,
+            2.1579911708831787
+          ]
+        },
+        {
+          "name": "C5",
+          "alt_name": "C5",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.9824039936065674,
+            0.415524959564209,
+            1.5890380144119263
+          ]
+        },
+        {
+          "name": "C6",
+          "alt_name": "C6",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.228657245635986,
+            0.2838404178619385,
+            2.0403778553009033
+          ]
+        },
+        {
+          "name": "N6",
+          "alt_name": "N6",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.617800235748291,
+            0.7508507370948792,
+            3.3320772647857666
+          ]
+        },
+        {
+          "name": "N1",
+          "alt_name": "N1",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            5.194783687591553,
+            -0.3258013427257538,
+            1.1532961130142212
+          ]
+        },
+        {
+          "name": "C2",
+          "alt_name": "C2",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.865482330322266,
+            -0.6940300464630127,
+            -0.06365365535020828
+          ]
+        },
+        {
+          "name": "N3",
+          "alt_name": "N3",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.51737642288208,
+            -0.4949606657028198,
+            -0.5509183406829834
+          ]
+        },
+        {
+          "name": "C4",
+          "alt_name": "C4",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.648484945297241,
+            -0.000663413607981056,
+            0.27698570489883423
+          ]
+        }
+      ],
+      "bonds": [
+        {
+          "i": 0,
+          "j": 1,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 4,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 4,
+          "j": 5,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 5,
+          "j": 6,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 7,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 8,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 7,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 9,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 10,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 11,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 12,
+          "j": 13,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 13,
+          "j": 14,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 13,
+          "j": 22,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 14,
+          "j": 15,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 15,
+          "j": 16,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 17,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 22,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 17,
+          "j": 18,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 17,
+          "j": 19,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 19,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 20,
+          "j": 21,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 21,
+          "j": 22,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        }
+      ],
+      "num_atoms": 23,
+      "center_atom_name": "C1'",
+      "center_atom_idx": 12,
+      "disto_atom_name": "C4",
+      "disto_atom_idx": 22,
+      "backbone_atom_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    "G": {
+      "atoms": [
+        {
+          "name": "OP3",
+          "alt_name": "O3P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": true,
+          "ref_pos": [
+            6.644237995147705,
+            -0.7050490975379944,
+            -0.2109180986881256
+          ]
+        },
+        {
+          "name": "P",
+          "alt_name": "P",
+          "element": 15,
+          "element_sym": "P",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            5.139711856842041,
+            -1.3515721559524536,
+            -0.6362473368644714
+          ]
+        },
+        {
+          "name": "OP1",
+          "alt_name": "O1P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.7375383377075195,
+            -2.387644052505493,
+            0.3902163505554199
+          ]
+        },
+        {
+          "name": "OP2",
+          "alt_name": "O2P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            5.264284610748291,
+            -2.0803966522216797,
+            -2.1594839096069336
+          ]
+        },
+        {
+          "name": "O5'",
+          "alt_name": "O5*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.9886012077331543,
+            -0.09404629468917847,
+            -0.6759463548660278
+          ]
+        },
+        {
+          "name": "C5'",
+          "alt_name": "C5*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.771390199661255,
+            -0.6197190284729004,
+            -1.1515552997589111
+          ]
+        },
+        {
+          "name": "C4'",
+          "alt_name": "C4*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            1.7009333372116089,
+            0.4755389094352722,
+            -1.1326014995574951
+          ]
+        },
+        {
+          "name": "O4'",
+          "alt_name": "O4*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            0.49504655599594116,
+            -0.02942417562007904,
+            -1.6633836030960083
+          ]
+        },
+        {
+          "name": "C3'",
+          "alt_name": "C3*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            1.419419765472412,
+            0.9865723252296448,
+            0.2815617024898529
+          ]
+        },
+        {
+          "name": "O3'",
+          "alt_name": "O3*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.2883050441741943,
+            2.014376640319824,
+            0.6995348334312439
+          ]
+        },
+        {
+          "name": "C2'",
+          "alt_name": "C2*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -0.026321297511458397,
+            1.4182847738265991,
+            0.19720005989074707
+          ]
+        },
+        {
+          "name": "O2'",
+          "alt_name": "O2*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.16402845084667206,
+            2.7873120307922363,
+            -0.10911159962415695
+          ]
+        },
+        {
+          "name": "C1'",
+          "alt_name": "C1*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CCW",
+          "chirality_id": 2,
+          "leaving": false,
+          "ref_pos": [
+            -0.5776304602622986,
+            0.5317036509513855,
+            -0.9305784702301025
+          ]
+        },
+        {
+          "name": "N9",
+          "alt_name": "N9",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.4050607681274414,
+            -0.5436193943023682,
+            -0.3854680359363556
+          ]
+        },
+        {
+          "name": "C8",
+          "alt_name": "C8",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.9459834098815918,
+            -1.7014286518096924,
+            0.32832613587379456
+          ]
+        },
+        {
+          "name": "N7",
+          "alt_name": "N7",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.8450795412063599,
+            -2.227071523666382,
+            1.1088582277297974
+          ]
+        },
+        {
+          "name": "C5",
+          "alt_name": "C5",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.9815611839294434,
+            -1.3870106935501099,
+            0.9438794255256653
+          ]
+        },
+        {
+          "name": "C6",
+          "alt_name": "C6",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.235187530517578,
+            -1.395051121711731,
+            1.6874809265136719
+          ]
+        },
+        {
+          "name": "O6",
+          "alt_name": "O6",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.506306171417236,
+            -2.299900531768799,
+            2.5198378562927246
+          ]
+        },
+        {
+          "name": "N1",
+          "alt_name": "N1",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -5.147140026092529,
+            -0.31516948342323303,
+            1.4354828596115112
+          ]
+        },
+        {
+          "name": "C2",
+          "alt_name": "C2",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.775737285614014,
+            0.7271577715873718,
+            0.5026811957359314
+          ]
+        },
+        {
+          "name": "N2",
+          "alt_name": "N2",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -5.6622724533081055,
+            1.819312334060669,
+            0.2648625075817108
+          ]
+        },
+        {
+          "name": "N3",
+          "alt_name": "N3",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.625244140625,
+            0.6793572902679443,
+            -0.11851830780506134
+          ]
+        },
+        {
+          "name": "C4",
+          "alt_name": "C4",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.726264476776123,
+            -0.41668516397476196,
+            0.10688411444425583
+          ]
+        }
+      ],
+      "bonds": [
+        {
+          "i": 0,
+          "j": 1,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 4,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 4,
+          "j": 5,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 5,
+          "j": 6,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 7,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 8,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 7,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 9,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 10,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 11,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 12,
+          "j": 13,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 13,
+          "j": 14,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 13,
+          "j": 23,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 14,
+          "j": 15,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 15,
+          "j": 16,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 17,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 23,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 17,
+          "j": 18,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 17,
+          "j": 19,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 19,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 20,
+          "j": 21,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 20,
+          "j": 22,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 22,
+          "j": 23,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        }
+      ],
+      "num_atoms": 24,
+      "center_atom_name": "C1'",
+      "center_atom_idx": 12,
+      "disto_atom_name": "C4",
+      "disto_atom_idx": 23,
+      "backbone_atom_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    "C": {
+      "atoms": [
+        {
+          "name": "OP3",
+          "alt_name": "O3P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": true,
+          "ref_pos": [
+            5.400578022003174,
+            1.236999750137329,
+            -0.22665806114673615
+          ]
+        },
+        {
+          "name": "P",
+          "alt_name": "P",
+          "element": 15,
+          "element_sym": "P",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.216863632202148,
+            1.64197838306427,
+            0.9136981964111328
+          ]
+        },
+        {
+          "name": "OP1",
+          "alt_name": "O1P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.539172887802124,
+            2.9293417930603027,
+            0.49975281953811646
+          ]
+        },
+        {
+          "name": "OP2",
+          "alt_name": "O2P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.957581996917725,
+            1.8663396835327148,
+            2.418149948120117
+          ]
+        },
+        {
+          "name": "O5'",
+          "alt_name": "O5*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.0647923946380615,
+            0.3905973434448242,
+            1.0435199737548828
+          ]
+        },
+        {
+          "name": "C5'",
+          "alt_name": "C5*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.5272440910339355,
+            0.14574109017848969,
+            -0.23492202162742615
+          ]
+        },
+        {
+          "name": "C4'",
+          "alt_name": "C4*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            1.458023190498352,
+            -0.9451389908790588,
+            -0.12690360844135284
+          ]
+        },
+        {
+          "name": "O4'",
+          "alt_name": "O4*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            0.4166613221168518,
+            -0.5115485787391663,
+            0.7163265347480774
+          ]
+        },
+        {
+          "name": "C3'",
+          "alt_name": "C3*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            0.8491259217262268,
+            -1.2874224185943604,
+            -1.4827696084976196
+          ]
+        },
+        {
+          "name": "O3'",
+          "alt_name": "O3*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.5749582052230835,
+            -2.296900749206543,
+            -2.1371307373046875
+          ]
+        },
+        {
+          "name": "C2'",
+          "alt_name": "C2*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -0.5493078231811523,
+            -1.743140459060669,
+            -1.1140049695968628
+          ]
+        },
+        {
+          "name": "O2'",
+          "alt_name": "O2*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.6845833659172058,
+            -3.1460442543029785,
+            -1.1343224048614502
+          ]
+        },
+        {
+          "name": "C1'",
+          "alt_name": "C1*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CCW",
+          "chirality_id": 2,
+          "leaving": false,
+          "ref_pos": [
+            -0.7556084394454956,
+            -1.1811025142669678,
+            0.30281367897987366
+          ]
+        },
+        {
+          "name": "N1",
+          "alt_name": "N1",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.9034591913223267,
+            -0.26113012433052063,
+            0.3400464951992035
+          ]
+        },
+        {
+          "name": "C2",
+          "alt_name": "C2",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.8422319889068604,
+            1.0721101760864258,
+            -0.20611312985420227
+          ]
+        },
+        {
+          "name": "O2",
+          "alt_name": "O2",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.7792840600013733,
+            1.5217673778533936,
+            -0.7100661993026733
+          ]
+        },
+        {
+          "name": "N3",
+          "alt_name": "N3",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.013061285018921,
+            1.8942855596542358,
+            -0.1794193685054779
+          ]
+        },
+        {
+          "name": "C4",
+          "alt_name": "C4",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.13743257522583,
+            1.4551876783370972,
+            0.304779052734375
+          ]
+        },
+        {
+          "name": "N4",
+          "alt_name": "N4",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -5.282522201538086,
+            2.3072187900543213,
+            0.3127005398273468
+          ]
+        },
+        {
+          "name": "C5",
+          "alt_name": "C5",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.238390922546387,
+            0.0798455998301506,
+            0.8390400409698486
+          ]
+        },
+        {
+          "name": "C6",
+          "alt_name": "C6",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.170496702194214,
+            -0.723198652267456,
+            0.8433040976524353
+          ]
+        }
+      ],
+      "bonds": [
+        {
+          "i": 0,
+          "j": 1,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 4,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 4,
+          "j": 5,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 5,
+          "j": 6,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 7,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 8,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 7,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 9,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 10,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 11,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 12,
+          "j": 13,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 13,
+          "j": 14,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 13,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 14,
+          "j": 15,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 14,
+          "j": 16,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 17,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 17,
+          "j": 18,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 17,
+          "j": 19,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 19,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        }
+      ],
+      "num_atoms": 21,
+      "center_atom_name": "C1'",
+      "center_atom_idx": 12,
+      "disto_atom_name": "C2",
+      "disto_atom_idx": 14,
+      "backbone_atom_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    "U": {
+      "atoms": [
+        {
+          "name": "OP3",
+          "alt_name": "O3P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": true,
+          "ref_pos": [
+            3.5597965717315674,
+            -2.0502002239227295,
+            2.019538402557373
+          ]
+        },
+        {
+          "name": "P",
+          "alt_name": "P",
+          "element": 15,
+          "element_sym": "P",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.149545669555664,
+            -1.754136562347412,
+            0.46016839146614075
+          ]
+        },
+        {
+          "name": "OP1",
+          "alt_name": "O1P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            5.583288192749023,
+            -1.2841260433197021,
+            0.5536647439002991
+          ]
+        },
+        {
+          "name": "OP2",
+          "alt_name": "O2P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            4.093199729919434,
+            -3.1824285984039307,
+            -0.4471062123775482
+          ]
+        },
+        {
+          "name": "O5'",
+          "alt_name": "O5*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.2185072898864746,
+            -0.5435304045677185,
+            -0.29666951298713684
+          ]
+        },
+        {
+          "name": "C5'",
+          "alt_name": "C5*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.8968486785888672,
+            -1.0144935846328735,
+            -0.4179041087627411
+          ]
+        },
+        {
+          "name": "C4'",
+          "alt_name": "C4*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            1.0218946933746338,
+            0.07675466686487198,
+            -1.0418492555618286
+          ]
+        },
+        {
+          "name": "O4'",
+          "alt_name": "O4*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.2899335026741028,
+            -0.4085608720779419,
+            -1.217378854751587
+          ]
+        },
+        {
+          "name": "C3'",
+          "alt_name": "C3*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            0.9410697817802429,
+            1.327057957649231,
+            -0.16548536717891693
+          ]
+        },
+        {
+          "name": "O3'",
+          "alt_name": "O3*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            2.010082244873047,
+            2.225964307785034,
+            -0.35392558574676514
+          ]
+        },
+        {
+          "name": "C2'",
+          "alt_name": "C2*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -0.4066626727581024,
+            1.9065583944320679,
+            -0.5357627272605896
+          ]
+        },
+        {
+          "name": "O2'",
+          "alt_name": "O2*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -0.3117303252220154,
+            2.9139273166656494,
+            -1.5171314477920532
+          ]
+        },
+        {
+          "name": "C1'",
+          "alt_name": "C1*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CCW",
+          "chirality_id": 2,
+          "leaving": false,
+          "ref_pos": [
+            -1.1793605089187622,
+            0.6817454695701599,
+            -1.0558699369430542
+          ]
+        },
+        {
+          "name": "N1",
+          "alt_name": "N1",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.257268190383911,
+            0.3181493878364563,
+            -0.12013427913188934
+          ]
+        },
+        {
+          "name": "C2",
+          "alt_name": "C2",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.5917577743530273,
+            0.8371787071228027,
+            -0.3004927635192871
+          ]
+        },
+        {
+          "name": "O2",
+          "alt_name": "O2",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.8700854778289795,
+            1.5787311792373657,
+            -1.2812905311584473
+          ]
+        },
+        {
+          "name": "N3",
+          "alt_name": "N3",
+          "element": 7,
+          "element_sym": "N",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.609492778778076,
+            0.5107200145721436,
+            0.6477537155151367
+          ]
+        },
+        {
+          "name": "C4",
+          "alt_name": "C4",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -4.27734375,
+            -0.2904910743236542,
+            1.7819784879684448
+          ]
+        },
+        {
+          "name": "O4",
+          "alt_name": "O4",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -5.161877155303955,
+            -0.5896590948104858,
+            2.6267611980438232
+          ]
+        },
+        {
+          "name": "C5",
+          "alt_name": "C5",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.8971729278564453,
+            -0.7575724124908447,
+            1.9620145559310913
+          ]
+        },
+        {
+          "name": "C6",
+          "alt_name": "C6",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.9564117193222046,
+            -0.45620453357696533,
+            1.0620646476745605
+          ]
+        }
+      ],
+      "bonds": [
+        {
+          "i": 0,
+          "j": 1,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 4,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 4,
+          "j": 5,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 5,
+          "j": 6,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 7,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 8,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 7,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 9,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 10,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 11,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 12,
+          "j": 13,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 13,
+          "j": 14,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 13,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 14,
+          "j": 15,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 14,
+          "j": 16,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 16,
+          "j": 17,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 17,
+          "j": 18,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 17,
+          "j": 19,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        },
+        {
+          "i": 19,
+          "j": 20,
+          "order": 1.5,
+          "type": "AROMATIC",
+          "type_id": 4,
+          "aromatic": true
+        }
+      ],
+      "num_atoms": 21,
+      "center_atom_name": "C1'",
+      "center_atom_idx": 12,
+      "disto_atom_name": "C2",
+      "disto_atom_idx": 14,
+      "backbone_atom_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    "N": {
+      "atoms": [
+        {
+          "name": "OP3",
+          "alt_name": "O3P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": true,
+          "ref_pos": [
+            3.8121285438537598,
+            1.2235337495803833,
+            -0.8421583771705627
+          ]
+        },
+        {
+          "name": "P",
+          "alt_name": "P",
+          "element": 15,
+          "element_sym": "P",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.065073251724243,
+            -0.2956874966621399,
+            -0.8856819868087769
+          ]
+        },
+        {
+          "name": "OP1",
+          "alt_name": "O1P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.455333948135376,
+            -0.9948483109474182,
+            -2.167560338973999
+          ]
+        },
+        {
+          "name": "OP2",
+          "alt_name": "O2P",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            3.5850160121917725,
+            -1.226246953010559,
+            0.4303589463233948
+          ]
+        },
+        {
+          "name": "O5'",
+          "alt_name": "O5*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.3694325685501099,
+            -0.12260725349187851,
+            -0.8469228148460388
+          ]
+        },
+        {
+          "name": "C5'",
+          "alt_name": "C5*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            1.0202124118804932,
+            0.5747539401054382,
+            0.3266194760799408
+          ]
+        },
+        {
+          "name": "C4'",
+          "alt_name": "C4*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -0.5053494572639465,
+            0.6632665395736694,
+            0.44452667236328125
+          ]
+        },
+        {
+          "name": "O4'",
+          "alt_name": "O4*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.049369215965271,
+            1.2493747472763062,
+            -0.7205677032470703
+          ]
+        },
+        {
+          "name": "C3'",
+          "alt_name": "C3*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -1.1556156873703003,
+            -0.7083485126495361,
+            0.6561716198921204
+          ]
+        },
+        {
+          "name": "O3'",
+          "alt_name": "O3*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -1.2835328578948975,
+            -1.0717854499816895,
+            2.011630058288574
+          ]
+        },
+        {
+          "name": "C2'",
+          "alt_name": "C2*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_TETRAHEDRAL_CW",
+          "chirality_id": 1,
+          "leaving": false,
+          "ref_pos": [
+            -2.4792823791503906,
+            -0.563101053237915,
+            -0.055969495326280594
+          ]
+        },
+        {
+          "name": "O2'",
+          "alt_name": "O2*",
+          "element": 8,
+          "element_sym": "O",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -3.509855031967163,
+            -0.11890745908021927,
+            0.7969945073127747
+          ]
+        },
+        {
+          "name": "C1'",
+          "alt_name": "C1*",
+          "element": 6,
+          "element_sym": "C",
+          "charge": 0,
+          "chirality": "CHI_UNSPECIFIED",
+          "chirality_id": 0,
+          "leaving": false,
+          "ref_pos": [
+            -2.1559414863586426,
+            0.4714067280292511,
+            -1.128667950630188
+          ]
+        }
+      ],
+      "bonds": [
+        {
+          "i": 0,
+          "j": 1,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "order": 2.0,
+          "type": "DOUBLE",
+          "type_id": 2,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 1,
+          "j": 4,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 4,
+          "j": 5,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 5,
+          "j": 6,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 7,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 6,
+          "j": 8,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 7,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 9,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 8,
+          "j": 10,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 11,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        },
+        {
+          "i": 10,
+          "j": 12,
+          "order": 1.0,
+          "type": "SINGLE",
+          "type_id": 1,
+          "aromatic": false
+        }
+      ],
+      "num_atoms": 13,
+      "center_atom_name": "C1'",
+      "center_atom_idx": 12,
+      "disto_atom_name": "C1'",
+      "disto_atom_idx": 12,
+      "backbone_atom_idx": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    }
+  }
+}
