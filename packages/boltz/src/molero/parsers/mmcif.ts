@@ -212,7 +212,18 @@ function ingestAtomRow(
   const atomicNumber = atomicNumberFromSymbol(symbol || guessElementFromName(
     cols.atomId >= 0 ? tokens[cols.atomId] : '',
   ))
-  const atomName = cols.atomId >= 0 ? tokens[cols.atomId] : ''
+  // Atom-name normalization:
+  // - Strip wrapping single/double quotes (mmCIF writers sometimes quote
+  //   names containing apostrophes — token then comes through with the
+  //   quotes still attached).
+  // - Normalize asterisk-prime notation (older PDB writers use `C4*` for
+  //   what mmCIF spec calls `C4'`). Collapse both to the prime form.
+  let atomName = cols.atomId >= 0 ? tokens[cols.atomId] : ''
+  if (atomName.length >= 2 && (atomName[0] === '"' || atomName[0] === "'")) {
+    const last = atomName[atomName.length - 1]
+    if (last === atomName[0]) atomName = atomName.slice(1, -1)
+  }
+  if (atomName.indexOf('*') >= 0) atomName = atomName.replace(/\*/g, "'")
   const compId = cols.compId >= 0 ? tokens[cols.compId] : 'UNK'
   const asymId = cols.asymId >= 0 ? tokens[cols.asymId] : 'A'
   const seqId = cols.seqId >= 0 ? parseInt(tokens[cols.seqId], 10) || 0 : 0

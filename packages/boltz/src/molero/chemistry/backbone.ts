@@ -32,12 +32,19 @@ export interface BackboneSegment {
 }
 
 export interface BackboneOptions {
-  /** Cα-Cα distance above which we split into a new segment (Å). */
-  gapThreshold: number
+  /** Protein Cα-Cα distance above which we split into a new segment (Å).
+   *  Healthy peptide bond ≈ 3.8 Å; 4.5 catches missing residues without
+   *  triggering on tight turns. */
+  proteinGapThreshold: number
+  /** Nucleic C4'-C4' (or P-P) distance above which we split (Å).
+   *  Consecutive nucleotides sit ≈ 5–7 Å apart depending on geometry;
+   *  8 Å is comfortably above that without merging across chain breaks. */
+  nucleicGapThreshold: number
 }
 
 export const DEFAULT_BACKBONE_OPTIONS: BackboneOptions = {
-  gapThreshold: 4.5,
+  proteinGapThreshold: 4.5,
+  nucleicGapThreshold: 8.0,
 }
 
 const PROTEIN_TRACE_NAMES = ['CA']
@@ -55,19 +62,24 @@ export function extractBackbones(
   for (const chain of chains) {
     let entityType: 'protein' | 'rna' | 'dna'
     let traceNames: string[]
+    let gapThreshold: number
     if (chain.entityType === 'protein') {
       entityType = 'protein'
       traceNames = PROTEIN_TRACE_NAMES
+      gapThreshold = opts.proteinGapThreshold
     } else if (chain.entityType === 'rna') {
       entityType = 'rna'
       traceNames = NUCLEIC_TRACE_NAMES
+      gapThreshold = opts.nucleicGapThreshold
     } else if (chain.entityType === 'dna') {
       entityType = 'dna'
       traceNames = NUCLEIC_TRACE_NAMES
+      gapThreshold = opts.nucleicGapThreshold
     } else {
       continue
     }
     const traceNameIds = traceNames.map((n) => internAtomName(n))
+    const gapThreshold2 = gapThreshold * gapThreshold
 
     // Walk residues in order; for each, scan its atoms for a trace atom.
     let currentPositions: number[] = []
@@ -112,7 +124,7 @@ export function extractBackbones(
       const pz = position[traceAtomIdx * 3 + 2]
       if (havePrev) {
         const dx = px - prevX, dy = py - prevY, dz = pz - prevZ
-        if (dx * dx + dy * dy + dz * dz > opts.gapThreshold * opts.gapThreshold) {
+        if (dx * dx + dy * dy + dz * dz > gapThreshold2) {
           finalizeSegment()
         }
       }

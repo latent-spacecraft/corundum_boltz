@@ -34,13 +34,17 @@ import { createSpherePass, type SpherePassResources } from './passes/sphere'
 import { createStickPass, type StickPassResources } from './passes/stick'
 import { createRibbonPass, type RibbonPassResources } from './passes/ribbon'
 import {
+  createNucleicBasePass,
+  type NucleicBasePassResources,
+} from './passes/nucleic-bases'
+import {
   buildGaussianSurface,
   type GaussianSurfaceResources,
 } from './passes/gaussian-surface'
 import { createGlassPass, type GlassPassResources } from './passes/glass'
 import { computeBonds } from './chemistry/bonds'
+import { extractNucleicBases } from './chemistry/nucleic-bases'
 import { BUNDLED_GLASS_PRESET, splitPreset, type GlassPreset } from './glass-preset'
-import { AtomFlag } from './scene/scene'
 
 export interface MoleroStructure {
   data: string
@@ -80,6 +84,7 @@ interface RendererState {
   spherePass: SpherePassResources | null
   stickPass: StickPassResources | null
   ribbonPass: RibbonPassResources | null
+  nucleicBasePass: NucleicBasePassResources | null
   surface: GaussianSurfaceResources | null
   glassPass: GlassPassResources | null
 }
@@ -160,6 +165,7 @@ export function MoleroViewer({
           spherePass: null,
           stickPass: null,
           ribbonPass: null,
+          nucleicBasePass: null,
           surface: null,
           glassPass: null,
         }
@@ -190,6 +196,7 @@ export function MoleroViewer({
         if (s.spherePass) s.spherePass.dispose()
         if (s.stickPass) s.stickPass.dispose()
         if (s.ribbonPass) s.ribbonPass.dispose()
+        if (s.nucleicBasePass) s.nucleicBasePass.dispose()
         if (s.glassPass) s.glassPass.dispose()
         if (s.surface) s.surface.dispose()
         s.controls.dispose()
@@ -237,6 +244,11 @@ export function MoleroViewer({
       s.ribbonPass.dispose()
       s.ribbonPass = null
     }
+    if (s.nucleicBasePass) {
+      s.scene.remove(s.nucleicBasePass.mesh)
+      s.nucleicBasePass.dispose()
+      s.nucleicBasePass = null
+    }
     if (s.glassPass) {
       s.scene.remove(s.glassPass.mesh)
       s.glassPass.dispose()
@@ -256,46 +268,44 @@ export function MoleroViewer({
       const built = buildScene(parsed)
       const tParse = performance.now() - t0
 
+      // Diagnostic — chain classifications and residue-type counts. Helps
+      // us catch the case where a DNA chain didn't classify because of
+      // unexpected residue codes (e.g. CCD synonyms, non-standard bases),
+      // or backbone extraction yielded zero segments.
+      {
+        const counts: Record<string, number> = {}
+        for (const c of built.chains) {
+          counts[c.entityType] = (counts[c.entityType] ?? 0) + 1
+        }
+        const chainSummary = built.chains
+          .map((c) => `${c.asymId}=${c.entityType}(${c.residueEnd - c.residueStart}r)`)
+          .join(' ')
+        console.log('[Molero] chains:', counts, '·', chainSummary)
+      }
+
       // ball-stick: full atomic detail (every atom + every bond).
-      // cartoon:    ribbon + ball-and-stick on sidechain atoms only.
+      // cartoon:    ribbon only — atoms hidden (sidechains will return as
+      //             a function of selection in a future slice).
       // glass:      gem shell only.
       // all:        cartoon + glass (composited via transmission).
-      const wantSpheresOrSticks =
-        representation === 'ball-stick' ||
-        representation === 'cartoon' ||
-        representation === 'all'
+      const wantBallStick = representation === 'ball-stick'
       const wantCartoon = representation === 'cartoon' || representation === 'all'
       const wantGlass = representation === 'glass' || representation === 'all'
-      const hideBackbone = wantCartoon // cartoon hides backbone atoms / backbone-only bonds
 
       let bondCount = 0
       let tBonds = 0
-      if (wantSpheresOrSticks) {
+      if (wantBallStick) {
         const tBonds0 = performance.now()
         const bonds = computeBonds(built.attrs, built.bbox)
         tBonds = performance.now() - tBonds0
         bondCount = bonds.count
 
-        const flagsArr = built.attrs.flags
-        const isBackbone = (i: number) => (flagsArr[i] & AtomFlag.Backbone) !== 0
-        // Cartoon: hide pure-backbone atoms (N, Cα, C, O — the ribbon
-        // already carries those). Sidechain atoms render.
-        const atomFilter = hideBackbone
-          ? (i: number) => !isBackbone(i)
-          : undefined
-        // Cartoon: drop bonds where both endpoints are backbone (Cα-C,
-        // C-N, etc — also covered by the ribbon). Keep bonds where at
-        // least one end is sidechain (Cα-Cβ et al — the attachment).
-        const bondFilter = hideBackbone
-          ? (a: number, b: number) => !(isBackbone(a) && isBackbone(b))
-          : undefined
-
         // Spheres shrink when sticks are present (ball-and-stick look).
-        const sphere = createSpherePass(built, { scale: 0.28, atomFilter })
+        const sphere = createSpherePass(built, { scale: 0.28 })
         s.scene.add(sphere.mesh)
         s.spherePass = sphere
 
-        const stick = createStickPass(built, bonds, { bondFilter })
+        const stick = createStickPass(built, bonds)
         s.scene.add(stick.mesh)
         s.stickPass = stick
       }
@@ -304,6 +314,16 @@ export function MoleroViewer({
         const ribbon = createRibbonPass(built)
         s.scene.add(ribbon.group)
         s.ribbonPass = ribbon
+
+        // Nucleic acid base tiles — flat planks attached to each
+        // nucleotide ring. Empty array for protein-only structures, so
+        // the pass is essentially free in that case.
+        const bases = extractNucleicBases(built)
+        if (bases.length > 0) {
+          const nucleic = createNucleicBasePass(bases)
+          s.scene.add(nucleic.mesh)
+          s.nucleicBasePass = nucleic
+        }
       }
 
       let tGlass = 0

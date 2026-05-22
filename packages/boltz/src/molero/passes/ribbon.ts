@@ -46,12 +46,29 @@ import { CHAIN_PALETTE_HEX } from '../chemistry/chain-palette'
 import type { Scene as MoleroScene } from '../scene/scene'
 import { buildVariableRadiusTube } from './putty-tube'
 
+/**
+ * Cross-section per SS — (u = binormal axis, v = normal axis).
+ *   Coil:  equal radii, reads as a round tube.
+ *   Helix: U > V — flat ribbon in the binormal direction.
+ *   Sheet: U ≫ V — wider, thinner flat ribbon (perpendicular ovoid).
+ *
+ * Both U and V are scaled by pLDDT modulation; low-confidence regions
+ * taper symmetrically so a flat ribbon still reads as a flat ribbon
+ * (just thinner overall) rather than degenerating into a noodle.
+ */
+export interface SSRadii {
+  u: number
+  v: number
+}
+
 export interface RibbonPassOptions {
-  /** Base radii per SS (Å). Coil thinnest, sheet thickest. */
-  radii: { helix: number; sheet: number; coil: number }
+  /** Per-SS cross-section (Å). u = binormal-axis radius, v = normal-axis
+   *  radius. Equal → round; u > v → flat ribbon. `nucleic` is used for
+   *  RNA/DNA backbones; the rest are for proteins. */
+  radii: { helix: SSRadii; sheet: SSRadii; coil: SSRadii; nucleic: SSRadii }
   /** pLDDT modulation: radius = base × (floor + (1-floor) × pLDDT/100). */
   pLDDTFloor: number
-  /** Tube radial segments — 12 = dodecagonal-smooth. */
+  /** Tube radial segments — 16 = hexadecagonal, gives clean ovoid silhouette. */
   radialSegments: number
   /** Spline samples per trace residue. Higher = smoother bends + SS edges. */
   tubularSegmentsPerResidue: number
@@ -70,9 +87,14 @@ export interface RibbonPassOptions {
 }
 
 export const DEFAULT_RIBBON_OPTIONS: RibbonPassOptions = {
-  radii: { helix: 0.55, sheet: 0.65, coil: 0.30 },
+  radii: {
+    helix:   { u: 0.95, v: 0.30 }, // flat ribbon
+    sheet:   { u: 1.20, v: 0.22 }, // wider perpendicular ovoid
+    coil:    { u: 0.32, v: 0.32 }, // round tube
+    nucleic: { u: 0.60, v: 0.60 }, // round tube, ~2× protein coil
+  },
   pLDDTFloor: 0.40,
-  radialSegments: 12,
+  radialSegments: 16,
   tubularSegmentsPerResidue: 8,
   backbone: {},
   ssTintStrength: 0.55,
@@ -178,22 +200,25 @@ function buildSegmentGeometry(
   const tubularSegments = Math.max(8, (N - 1) * opts.tubularSegmentsPerResidue)
   const ringCount = tubularSegments + 1
 
-  // Per-residue base radius + color.
+  // Per-residue base radii (U + V) and color.
   const isProtein = seg.entityType === 'protein'
-  const baseRadius = new Float32Array(N)
+  const baseRadiusU = new Float32Array(N)
+  const baseRadiusV = new Float32Array(N)
   const baseColor = new Float32Array(N * 3)
   const chainHex = CHAIN_PALETTE[seg.chainIndex % CHAIN_PALETTE.length]
   const chainRGB = hexToLinearRGB(chainHex)
 
   for (let i = 0; i < N; i++) {
     const ssCode = isProtein ? ss[seg.residueIndex[i]] : SecondaryStructure.Coil
-    const base =
-      ssCode === SecondaryStructure.Helix ? opts.radii.helix
-      : ssCode === SecondaryStructure.Sheet ? opts.radii.sheet
-      : opts.radii.coil
+    const base = isProtein
+      ? (ssCode === SecondaryStructure.Helix ? opts.radii.helix
+        : ssCode === SecondaryStructure.Sheet ? opts.radii.sheet
+        : opts.radii.coil)
+      : opts.radii.nucleic
     const plddt = clamp01(bfactor[seg.atomIndex[i]] / 100)
     const mod = opts.pLDDTFloor + (1 - opts.pLDDTFloor) * plddt
-    baseRadius[i] = base * mod
+    baseRadiusU[i] = base.u * mod
+    baseRadiusV[i] = base.v * mod
 
     if (ssCode === SecondaryStructure.Coil || !isProtein) {
       baseColor[i * 3]     = chainRGB[0]
@@ -209,14 +234,16 @@ function buildSegmentGeometry(
   }
 
   // Resample onto tube ring samples.
-  const radii = new Float32Array(ringCount)
+  const radiiU = new Float32Array(ringCount)
+  const radiiV = new Float32Array(ringCount)
   const colors = new Float32Array(ringCount * 3)
   for (let r = 0; r < ringCount; r++) {
     const residueFloat = (r / tubularSegments) * (N - 1)
     const a = Math.floor(residueFloat)
     const b = Math.min(N - 1, a + 1)
     const t = residueFloat - a
-    radii[r] = baseRadius[a] * (1 - t) + baseRadius[b] * t
+    radiiU[r] = baseRadiusU[a] * (1 - t) + baseRadiusU[b] * t
+    radiiV[r] = baseRadiusV[a] * (1 - t) + baseRadiusV[b] * t
     colors[r * 3]     = baseColor[a * 3]     * (1 - t) + baseColor[b * 3]     * t
     colors[r * 3 + 1] = baseColor[a * 3 + 1] * (1 - t) + baseColor[b * 3 + 1] * t
     colors[r * 3 + 2] = baseColor[a * 3 + 2] * (1 - t) + baseColor[b * 3 + 2] * t
@@ -226,7 +253,8 @@ function buildSegmentGeometry(
     curve,
     tubularSegments,
     radialSegments: opts.radialSegments,
-    radii,
+    radiiU,
+    radiiV,
     colors,
     closed: false,
   })

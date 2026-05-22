@@ -1062,9 +1062,9 @@ function RepresentationToggle({
 }) {
   const items: { key: MoleroRepresentation; label: string; title: string }[] = [
     { key: 'ball-stick', label: 'B+S',     title: 'Every atom + every bond — full atomic detail' },
-    { key: 'cartoon',    label: 'Cartoon', title: 'Ribbon + sidechain ball+stick (backbone hidden)' },
+    { key: 'cartoon',    label: 'Cartoon', title: 'SS-aware ribbon only (sidechains return via selection)' },
     { key: 'glass',      label: 'Glass',   title: 'SASA-modulated refractive shell only' },
-    { key: 'all',        label: 'All',     title: 'Cartoon + sidechains composited inside the glass shell' },
+    { key: 'all',        label: 'All',     title: 'Cartoon composited inside the glass shell' },
   ]
   return (
     <div

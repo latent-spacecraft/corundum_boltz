@@ -70,7 +70,13 @@ export function parsePdb(text: string): ParsedEntityGraph {
     if (!isAtom && !isHet) continue
     if (line.length < 54) continue // can't contain coords
 
-    const atomName = line.slice(12, 16).trim()
+    // Normalize asterisk-prime notation (older PDB writers used C4* for
+    // C4'; both are valid synonyms for the same atom). Collapse to prime
+    // form to match the backbone-trace lookup names.
+    const rawAtomName = line.slice(12, 16).trim()
+    const atomName = rawAtomName.indexOf('*') >= 0
+      ? rawAtomName.replace(/\*/g, "'")
+      : rawAtomName
     const compId = line.slice(17, 20).trim() || 'UNK'
     const asymId = line.slice(21, 22).trim() || 'A'
     const seqId = parseInt(line.slice(22, 26).trim(), 10) || 0

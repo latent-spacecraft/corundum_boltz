@@ -1,23 +1,32 @@
 /**
- * Variable-radius tube builder — extrudes a circular cross-section along
- * a curve with per-sample radius and per-sample color.
+ * Variable-cross-section tube builder — extrudes an *elliptical* cross-
+ * section along a curve, with per-sample (radiusU, radiusV) and
+ * per-sample color.
  *
- * Three.js's stock `TubeGeometry` is constant-radius. We need
- * per-residue radius for the putty effect (thick at confident residues,
- * thin at low pLDDT) and per-residue color for SS tinting. Same Frenet-
- * frame parallel-transport math as `TubeGeometry`, just with the radius
- * and color closed over each tube sample.
+ * Two perpendicular radii distinguish ribbon styles by SS:
+ *   - radiusU = radiusV → circle (coil / nucleic)
+ *   - radiusU > radiusV → flat ribbon in the binormal axis (helix)
+ *   - radiusU ≫ radiusV → very thin flat ribbon (sheet body)
+ * U corresponds to the curve's binormal axis; V to its normal axis.
  *
- * The geometry layout is:
+ * Three.js's stock `TubeGeometry` is constant circular. We sweep our
+ * own polygon using the same Frenet-frame parallel-transport math,
+ * with per-sample radii/colors closed over each ring.
+ *
+ * Layout:
  *   - `(tubularSegments + 1) × (radialSegments + 1)` vertices
  *   - one ring per tube sample; the +1 radial vertex duplicates the
  *     seam so smooth-shaded normals don't twist at the boundary
  *   - indices stitch each quad into two triangles
  *
- * Inputs `radii[]` and `colors[]` are sampled at the same set of `t`s
- * the geometry is built on: `i / tubularSegments` for `i ∈ [0, N]`. The
- * caller is responsible for resampling per-residue values onto that
- * grid.
+ * Inputs (`radiiU`, `radiiV`, `colors`) are sampled at the same set of
+ * `t`s the geometry is built on: `i / tubularSegments` for `i ∈ [0, N]`.
+ * Caller is responsible for resampling per-residue values onto that grid.
+ *
+ * Surface normals are computed correctly for the elliptical shape via
+ * `(x_v × x_u_perp)` — for a circle this collapses to the radial vector;
+ * for elliptical, it accounts for the per-axis scale so highlights land
+ * where they should on the flat ribbon edges.
  */
 import {
   BufferAttribute,
@@ -32,12 +41,16 @@ export interface VariableTubeOptions {
   /** Curve to extrude along. */
   curve: CatmullRomCurve3
   /** Number of tube samples (rings). The resulting geometry has
-   *  `tubularSegments + 1` rings; `radii.length` must match that. */
+   *  `tubularSegments + 1` rings; `radiiU.length` must match that. */
   tubularSegments: number
-  /** Radial segments per ring (e.g. 10 = decagonal). */
+  /** Radial segments per ring (e.g. 12 = dodecagonal). */
   radialSegments: number
-  /** Per-sample radius, length = `tubularSegments + 1`. */
-  radii: Float32Array
+  /** Per-sample radius along the curve binormal axis. Length =
+   *  `tubularSegments + 1`. The "wide" axis of a flat ribbon. */
+  radiiU: Float32Array
+  /** Per-sample radius along the curve normal axis. Length =
+   *  `tubularSegments + 1`. The "thin" axis of a flat ribbon. */
+  radiiV: Float32Array
   /** Per-sample linear-RGB color, length = `3 * (tubularSegments + 1)`.
    *  Pass `null` to omit the `color` attribute. */
   colors: Float32Array | null
@@ -46,10 +59,13 @@ export interface VariableTubeOptions {
 }
 
 export function buildVariableRadiusTube(opts: VariableTubeOptions): BufferGeometry {
-  const { curve, tubularSegments, radialSegments, radii, colors, closed } = opts
+  const { curve, tubularSegments, radialSegments, radiiU, radiiV, colors, closed } = opts
   const ringCount = tubularSegments + 1
-  if (radii.length !== ringCount) {
-    throw new Error(`radii length ${radii.length} must equal tubularSegments+1 (${ringCount})`)
+  if (radiiU.length !== ringCount) {
+    throw new Error(`radiiU length ${radiiU.length} must equal tubularSegments+1 (${ringCount})`)
+  }
+  if (radiiV.length !== ringCount) {
+    throw new Error(`radiiV length ${radiiV.length} must equal tubularSegments+1 (${ringCount})`)
   }
   if (colors && colors.length !== ringCount * 3) {
     throw new Error(`colors length ${colors.length} must equal 3*(tubularSegments+1) (${ringCount * 3})`)
@@ -77,7 +93,8 @@ export function buildVariableRadiusTube(opts: VariableTubeOptions): BufferGeomet
     curve.getPointAt(t, P)
     const N = frames.normals[i]
     const B = frames.binormals[i]
-    const r = radii[i]
+    const rU = radiiU[i]
+    const rV = radiiV[i]
     const cr = colors
       ? [colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]]
       : null
@@ -86,19 +103,36 @@ export function buildVariableRadiusTube(opts: VariableTubeOptions): BufferGeomet
       const v = (j / radialSegments) * Math.PI * 2
       const sinV = Math.sin(v)
       const cosV = -Math.cos(v) // matches TubeGeometry's outward-facing convention
-      let nx = cosV * N.x + sinV * B.x
-      let ny = cosV * N.y + sinV * B.y
-      let nz = cosV * N.z + sinV * B.z
-      // Normalize defensively; degenerate frames at flat spline segments
-      // can produce zero-length tangents.
+      // Position: ellipse parameterized as (rU·cos·B + rV·sin·N).
+      // U is the binormal axis ("wide" axis of a flat ribbon — the
+      // direction perpendicular to the curve's center-of-curvature
+      // pull). V is the normal axis (toward the helix axis for a
+      // helix — the "thin" axis of a flat ribbon). This puts the wide
+      // face of helix/sheet ribbons perpendicular to the direction of
+      // travel: looking at a helix from outside the cylinder, you see
+      // the ribbon flat-on as it sweeps.
+      const px = P.x + rU * cosV * B.x + rV * sinV * N.x
+      const py = P.y + rU * cosV * B.y + rV * sinV * N.y
+      const pz = P.z + rU * cosV * B.z + rV * sinV * N.z
+      positions[vi]     = px
+      positions[vi + 1] = py
+      positions[vi + 2] = pz
+      // Normal: outward-pointing normal of the elliptical cross-section.
+      // For an ellipse x²/a² + y²/b² = 1, the outward normal at angle θ is
+      // (b·cosθ, a·sinθ) (un-normalized). So in our (B, N) UV frame:
+      //   n_uv = (rV·cosV along B, rU·sinV along N)
+      // (note the swap: the wider axis has the smaller normal component
+      // — highlights land where curvature is highest, on the narrow ends).
+      const nuRaw = rV * cosV
+      const nvRaw = rU * sinV
+      let nx = nuRaw * B.x + nvRaw * N.x
+      let ny = nuRaw * B.y + nvRaw * N.y
+      let nz = nuRaw * B.z + nvRaw * N.z
       const nl = Math.hypot(nx, ny, nz) || 1
       nx /= nl; ny /= nl; nz /= nl
       normals[vi]     = nx
       normals[vi + 1] = ny
       normals[vi + 2] = nz
-      positions[vi]     = P.x + r * nx
-      positions[vi + 1] = P.y + r * ny
-      positions[vi + 2] = P.z + r * nz
       if (colorBuf && cr) {
         colorBuf[vi]     = cr[0]
         colorBuf[vi + 1] = cr[1]
