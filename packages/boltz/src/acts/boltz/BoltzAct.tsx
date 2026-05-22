@@ -1135,6 +1135,7 @@ const GLASS_SLIDERS: GlassSlider[] = [
   { key: 'clearcoat',        label: 'clearcoat',     min: 0,    max: 1,    step: 0.01, group: 'material' },
   { key: 'clearcoatRoughness', label: 'cc rough',    min: 0,    max: 1,    step: 0.01, group: 'material' },
   { key: 'envMapIntensity',  label: 'env intensity', min: 0,    max: 3,    step: 0.05, group: 'material' },
+  { key: 'chainTintStrength', label: 'chain tint',   min: 0,    max: 1,    step: 0.01, group: 'material' },
 ]
 const GLASS_GROUP_ORDER: GlassSliderGroup[] = ['surface', 'material']
 const GLASS_GROUP_LABEL: Record<GlassSliderGroup, string> = {

@@ -59,6 +59,13 @@ export interface GlassPassOptions {
   clearcoat: number
   clearcoatRoughness: number
   envMapIntensity: number
+  /**
+   * 0..1 blend amount for the per-vertex chain tint. 0 = pure white
+   * (chemistry colors only); 1 = full chain color (gem tinted by chain).
+   * The tint is multiplicative against the chemistry-driven base, so
+   * SASA / hydrophobicity / charge still show through.
+   */
+  chainTintStrength: number
 }
 
 export const DEFAULT_GLASS_OPTIONS: GlassPassOptions = {
@@ -71,6 +78,7 @@ export const DEFAULT_GLASS_OPTIONS: GlassPassOptions = {
   clearcoat: 1.0,
   clearcoatRoughness: 0.08,
   envMapIntensity: 1.2,
+  chainTintStrength: 0.35,
 }
 
 export interface GlassPassResources {
@@ -103,6 +111,9 @@ export function createGlassPass(
   // Since `attribute` from three/tsl isn't typed to itemSize, we cast.
   const aGlass = nodeObject(
     (attributeNode as any)('aGlass') as any,
+  ) as any
+  const aChainTint = nodeObject(
+    (attributeNode as any)('aChainTint') as any,
   ) as any
   const sasaN = aGlass.x
   const hydroN = aGlass.y
@@ -144,6 +155,14 @@ export function createGlassPass(
   const negativeTint = vec3(1.00, 0.30, 0.20)
   const chargeTint = select(chargeSigned.greaterThan(0), positiveTint, negativeTint)
   material.emissiveNode = chargeTint.mul(chargeMag).mul(0.3)
+
+  // ── Base color tint — per-vertex chain palette ───────────────────────
+  // The default white base (material.color = 0xffffff) means the gem is
+  // chemistry-tinted only. Blending the chain palette in multiplicatively
+  // means SASA / hydrophobicity / charge channels stay visible; the
+  // chain just biases the underlying hue.
+  const whiteVec = vec3(1, 1, 1)
+  material.colorNode = mix(whiteVec, aChainTint, uniform(opts.chainTintStrength))
 
   // ── Clearcoat — applied uniformly via uniforms ───────────────────────
   material.clearcoatNode = uniform(opts.clearcoat)

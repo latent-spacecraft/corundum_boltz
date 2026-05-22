@@ -122,10 +122,10 @@ export function GemLogo({ size = 24, onClick, title = 'Corundum' }: GemLogoProps
       }
       const dt = Math.min(0.1, (now - last) / 1000)
       last = now
-      phase += dt * -0.20944 // rad/s ≈ 30 s/rotation
+      phase += dt * -0.42 // rad/s ≈ 30 s/rotation
       //root.rotation.y = phase/4
       root.rotation.z = phase
-      root.rotation.x = Math.sin(phase * 5.0) * 0.2
+      root.rotation.x = 0.22 // Math.sin(phase * 5.0) * 0.2
       renderer.render(scene, camera)
     }
     raf = requestAnimationFrame(tick)

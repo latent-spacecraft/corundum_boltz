@@ -33,6 +33,7 @@ import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js'
 import { computeSASA } from '../chemistry/sasa'
 import { computeHydrophobicity, hydrophobicityNorm } from '../chemistry/hydrophobicity'
 import { VDW_RADII, isHydrogen } from '../chemistry/elements'
+import { CHAIN_PALETTE_LINEAR } from '../chemistry/chain-palette'
 import { AtomFlag, type Scene as MoleroScene } from '../scene/scene'
 
 export interface GaussianSurfaceOptions {
@@ -214,15 +215,17 @@ export function buildGaussianSurface(
   // ── Per-vertex chemistry attribute ────────────────────────────────────
   const sasa = computeSASA(scene.attrs, scene.bbox)
   const hydrophobicity = computeHydrophobicity(scene)
-  const glassAttr = buildPerVertexAttribute(
-    scene,
-    surfaceGeom,
-    vertexCount,
-    sasa,
-    hydrophobicity,
-    opts.sasaReference,
-  )
+  const { glass: glassAttr, chainTint: chainTintAttr } =
+    buildPerVertexAttribute(
+      scene,
+      surfaceGeom,
+      vertexCount,
+      sasa,
+      hydrophobicity,
+      opts.sasaReference,
+    )
   surfaceGeom.setAttribute('aGlass', new Float32BufferAttribute(glassAttr, 4))
+  surfaceGeom.setAttribute('aChainTint', new Float32BufferAttribute(chainTintAttr, 3))
   surfaceGeom.computeBoundingSphere()
 
   return {
@@ -261,10 +264,11 @@ function buildPerVertexAttribute(
   sasa: Float32Array,
   hydrophobicity: Float32Array,
   sasaRef: number,
-): Float32Array {
+): { glass: Float32Array; chainTint: Float32Array } {
   const A = scene.attrs.count
   const position = scene.attrs.position
   const atomicNumber = scene.attrs.atomicNumber
+  const chainIndex = scene.attrs.chainIndex
   const { bbox } = scene
   const ox = bbox.min[0] - BLEND_GRID_CELL
   const oy = bbox.min[1] - BLEND_GRID_CELL
@@ -304,8 +308,22 @@ function buildPerVertexAttribute(
     inv2Sigma2[i] = 1 / (2 * s * s)
   }
 
+  // Precompute per-atom chain-palette linear RGB (atomic indexing avoids
+  // a modulo per vertex contribution).
+  const paletteLen = CHAIN_PALETTE_LINEAR.length / 3
+  const atomTintR = new Float32Array(A)
+  const atomTintG = new Float32Array(A)
+  const atomTintB = new Float32Array(A)
+  for (let i = 0; i < A; i++) {
+    const ci = chainIndex[i] % paletteLen
+    atomTintR[i] = CHAIN_PALETTE_LINEAR[ci * 3]
+    atomTintG[i] = CHAIN_PALETTE_LINEAR[ci * 3 + 1]
+    atomTintB[i] = CHAIN_PALETTE_LINEAR[ci * 3 + 2]
+  }
+
   const positions = geom.getAttribute('position').array as Float32Array
-  const out = new Float32Array(vertexCount * 4)
+  const glass = new Float32Array(vertexCount * 4)
+  const chainTint = new Float32Array(vertexCount * 3)
   const charges = scene.attrs.formalCharge
   const flags = scene.attrs.flags
 
@@ -330,6 +348,7 @@ function buildPerVertexAttribute(
     let hydroAcc = 0
     let chargeAcc = 0
     let aromaticAcc = 0
+    let tintR = 0, tintG = 0, tintB = 0
 
     for (let dz = -1; dz <= 1; dz++) {
       const nz_ = cz + dz
@@ -360,16 +379,22 @@ function buildPerVertexAttribute(
             // visual channel (metalness boost), shader doesn't need to
             // distinguish for the glass pass.
             if (flags[j] & AtomFlag.TransitionMetal) aromaticAcc += w * 2.5
+            tintR += w * atomTintR[j]
+            tintG += w * atomTintG[j]
+            tintB += w * atomTintB[j]
           }
         }
       }
     }
 
     if (wSum < 1e-8) {
-      out[v * 4]     = 0
-      out[v * 4 + 1] = 0.5
-      out[v * 4 + 2] = 0.5
-      out[v * 4 + 3] = 0
+      glass[v * 4]     = 0
+      glass[v * 4 + 1] = 0.5
+      glass[v * 4 + 2] = 0.5
+      glass[v * 4 + 3] = 0
+      chainTint[v * 3]     = 1
+      chainTint[v * 3 + 1] = 1
+      chainTint[v * 3 + 2] = 1
       continue
     }
     const invW = 1 / wSum
@@ -380,10 +405,15 @@ function buildPerVertexAttribute(
     // gives the in-neighborhood fraction. Clamp to [0, 1] (metal boost
     // can push the unclamped value above 1).
     const ar = Math.min(1, aromaticAcc * invW)
-    out[v * 4]     = s
-    out[v * 4 + 1] = h
-    out[v * 4 + 2] = c
-    out[v * 4 + 3] = ar
+    glass[v * 4]     = s
+    glass[v * 4 + 1] = h
+    glass[v * 4 + 2] = c
+    glass[v * 4 + 3] = ar
+    // Chain-tint blend — linear RGB. At chain interfaces, the Gaussian
+    // weighting produces a smooth gradient between the two chains' hues.
+    chainTint[v * 3]     = tintR * invW
+    chainTint[v * 3 + 1] = tintG * invW
+    chainTint[v * 3 + 2] = tintB * invW
   }
-  return out
+  return { glass, chainTint }
 }

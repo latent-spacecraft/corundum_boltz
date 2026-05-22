@@ -42,6 +42,7 @@ import {
   detectSecondaryStructure,
   SecondaryStructure,
 } from '../chemistry/secondary-structure'
+import { CHAIN_PALETTE_HEX } from '../chemistry/chain-palette'
 import type { Scene as MoleroScene } from '../scene/scene'
 import { buildVariableRadiusTube } from './putty-tube'
 
@@ -84,12 +85,9 @@ export const DEFAULT_RIBBON_OPTIONS: RibbonPassOptions = {
   },
 }
 
-// Chain palette — eight perceptually distinct hues in sRGB; rendered to
-// linear when assigned to vertex colors (NodeMaterial wants linear input).
-const CHAIN_PALETTE = [
-  0xd4a557, 0x4fa3c7, 0xc15a7c, 0x6fc76f,
-  0xb18ad0, 0xe0985a, 0x82a8e0, 0xc7d44f,
-]
+// Chain palette pulled from the shared module so the glass surface
+// (gaussian-surface.ts → aChainTint) shows the same hues.
+const CHAIN_PALETTE = CHAIN_PALETTE_HEX
 
 // SS tints — warm helix, cool sheet, neutral coil.
 const SS_TINTS: Record<number, [number, number, number]> = {

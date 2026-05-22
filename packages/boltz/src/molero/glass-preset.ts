@@ -31,6 +31,7 @@ export interface GlassPreset {
   clearcoat: number
   clearcoatRoughness: number
   envMapIntensity: number
+  chainTintStrength: number
 }
 
 export const BUNDLED_GLASS_PRESET: GlassPreset = defaultPreset as GlassPreset
@@ -56,6 +57,7 @@ export function splitPreset(p: GlassPreset): {
       clearcoat: p.clearcoat,
       clearcoatRoughness: p.clearcoatRoughness,
       envMapIntensity: p.envMapIntensity,
+      chainTintStrength: p.chainTintStrength,
     },
   }
 }
