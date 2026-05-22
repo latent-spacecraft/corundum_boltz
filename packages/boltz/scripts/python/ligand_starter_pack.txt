@@ -1,0 +1,47 @@
+# Curated starter pack of common biological cofactors, nucleotides, sugars,
+# and metal ions. One CCD code per line; comments allowed. Used by
+# build_ligand_starter_pack.py.
+
+# ── Cofactors & redox ─────────────────────────────────────────────────
+HEM   # heme b
+HEC   # heme c
+HEA   # heme a
+NAD   # nicotinamide adenine dinucleotide
+NAP   # NADP+
+NDP   # NADPH
+FAD   # flavin adenine dinucleotide
+FMN   # flavin mononucleotide
+COA   # coenzyme A
+SAM   # S-adenosyl-L-methionine
+SAH   # S-adenosyl-L-homocysteine
+PLP   # pyridoxal 5'-phosphate
+BTN   # biotin
+TPP   # thiamine pyrophosphate
+PQQ   # pyrroloquinoline quinone
+B12   # cyanocobalamin
+
+# ── Nucleotides ───────────────────────────────────────────────────────
+ATP
+ADP
+AMP
+GTP
+GDP
+CTP
+UTP
+
+# ── Sugars ────────────────────────────────────────────────────────────
+GLC   # alpha-D-glucose
+BGC   # beta-D-glucose
+NAG   # N-acetyl-D-glucosamine
+
+# ── Lipids / vitamins / pigments ──────────────────────────────────────
+CLR   # cholesterol
+RET   # retinal
+
+# ── Metal ions (single atom, no bonds/constraints) ────────────────────
+ZN    # zinc
+MG    # magnesium
+FE    # iron
+CA    # calcium
+MN    # manganese
+CU    # copper

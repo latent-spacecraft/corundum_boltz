@@ -26,7 +26,7 @@ import geometryJson from './tables/geometry_constants.json'
 // ─────────────────────────────────────────────────────────────────────────────
 // Chain type
 
-export type ChainType = 'protein' | 'rna' | 'dna'
+export type ChainType = 'protein' | 'rna' | 'dna' | 'ligand'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // tokens.json
@@ -60,9 +60,11 @@ export const NUM_TOKENS: number = tokensData.tokens.length
 /**
  * Boltz residue-type token id from a single-letter code, dispatched by chain
  * type. Protein 'A' → ALA, RNA 'A' → A, DNA 'A' → DA. Unknown letters fall
- * back to the chain's "unknown" token (UNK / N / DN).
+ * back to the chain's "unknown" token. Ligand atoms always tokenise as UNK
+ * (Boltz convention — every atom gets the same res_type).
  */
 export function letterToTokenId(letter: string, chainType: ChainType = 'protein'): number {
+  if (chainType === 'ligand') return UNK_TOKEN_ID
   const tok = letterToResName(letter, chainType)
   const id = tokensData.token_ids[tok]
   if (id !== undefined) return id
@@ -74,12 +76,10 @@ export function letterToTokenId(letter: string, chainType: ChainType = 'protein'
 export function letterToResName(letter: string, chainType: ChainType = 'protein'): string {
   const upper = letter.toUpperCase()
   switch (chainType) {
-    case 'protein':
-      return tokensData.prot_letter_to_token[upper] ?? 'UNK'
-    case 'rna':
-      return nucleicData.rna_letter_to_token[upper] ?? 'N'
-    case 'dna':
-      return nucleicData.dna_letter_to_token[upper] ?? 'DN'
+    case 'protein': return tokensData.prot_letter_to_token[upper] ?? 'UNK'
+    case 'rna':     return nucleicData.rna_letter_to_token[upper] ?? 'N'
+    case 'dna':     return nucleicData.dna_letter_to_token[upper] ?? 'DN'
+    case 'ligand':  return 'UNK' // unused — ligand featurization reads atoms from the blob.
   }
 }
 
@@ -131,6 +131,9 @@ export function residueTopology(
   resName: string,
   chainType: ChainType = 'protein',
 ): ResidueTopology {
+  if (chainType === 'ligand') {
+    throw new Error('residueTopology() not applicable to ligand chains — load the per-CCD blob instead')
+  }
   let table: Record<string, ResidueTopology>
   let fallback: string
   switch (chainType) {
@@ -151,15 +154,20 @@ interface ChainTypesTable {
 }
 
 const chainTypes = (chainTypesJson as unknown as ChainTypesTable).data
-export const PROTEIN_CHAIN_TYPE_ID: number = chainTypes.chain_type_ids['PROTEIN']
-export const RNA_CHAIN_TYPE_ID: number     = chainTypes.chain_type_ids['RNA']
-export const DNA_CHAIN_TYPE_ID: number     = chainTypes.chain_type_ids['DNA']
+export const PROTEIN_CHAIN_TYPE_ID: number    = chainTypes.chain_type_ids['PROTEIN']
+export const RNA_CHAIN_TYPE_ID: number        = chainTypes.chain_type_ids['RNA']
+export const DNA_CHAIN_TYPE_ID: number        = chainTypes.chain_type_ids['DNA']
+export const NONPOLYMER_CHAIN_TYPE_ID: number = chainTypes.chain_type_ids['NONPOLYMER']
+
+/** Ligand atoms are tokenised with the protein UNK token (Boltz convention). */
+export const UNK_TOKEN_ID: number = tokensData.token_ids['UNK']
 
 export function chainTypeId(type: ChainType): number {
   switch (type) {
     case 'protein': return PROTEIN_CHAIN_TYPE_ID
     case 'rna':     return RNA_CHAIN_TYPE_ID
     case 'dna':     return DNA_CHAIN_TYPE_ID
+    case 'ligand':  return NONPOLYMER_CHAIN_TYPE_ID
   }
 }
 
@@ -270,7 +278,11 @@ export function atomBackboneChannel(atomName: string, chainType: ChainType): num
     const idx = PROTEIN_BACKBONE_INDEX[atomName]
     return idx !== undefined ? idx + 1 : 0
   }
-  // RNA + DNA share the 12-atom nucleic backbone vocabulary.
-  const idx = NUCLEIC_BACKBONE_INDEX[atomName]
-  return idx !== undefined ? idx + 5 : 0
+  if (chainType === 'rna' || chainType === 'dna') {
+    // Both share the 12-atom nucleic backbone vocabulary.
+    const idx = NUCLEIC_BACKBONE_INDEX[atomName]
+    return idx !== undefined ? idx + 5 : 0
+  }
+  // Ligand atoms have no backbone vocabulary — every atom is "sidechain".
+  return 0
 }

@@ -14,7 +14,18 @@
  *
  * Run: `npm run smoke:featurizer` from `packages/boltz`.
  */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { featurize, featurizeChains } from '../src/acts/boltz/featurizer'
+import type { LigandBlob } from '../src/acts/boltz/featurizer/ligand'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+function loadBlob(ccd: string): LigandBlob {
+  const path = resolve(HERE, `../public/ccd/${ccd}.json`)
+  return JSON.parse(readFileSync(path, 'utf8')).data as LigandBlob
+}
 
 const SEQ_A = 'NLYIQWLKDGGPSSGRPPPS'
 const SEQ_B = 'MKWVTFISLLFLFSSAYS'
@@ -178,6 +189,113 @@ console.log('— Mixed: protein + RNA + DNA —')
   expect('asym_id 3 distinct values', new Set(asym).size === 3)
   const entity = int64ToArray(f.tensors['entity_id']!.data as BigInt64Array)
   expect('entity_id 3 distinct values', new Set(entity).size === 3)
+}
+
+console.log('— Ligand single chain: HEM —')
+{
+  const hem = loadBlob('HEM')
+  const f = featurizeChains([{ sequence: 'HEM', type: 'ligand', blob: hem }])
+  expect('N = HEM atom count', f.N === hem.num_atoms, `got N=${f.N}, expected ${hem.num_atoms}`)
+  expect('A >= N (1 atom per token)', f.A >= f.N)
+
+  const molType = int64ToArray(f.tensors['mol_type']!.data as BigInt64Array)
+  // NONPOLYMER = 3
+  expect('mol_type = 3 (NONPOLYMER) across all tokens', molType.every((v) => v === 3))
+
+  // Ligand atoms tokenise as UNK (token id 22). Each token's res_type one-hot
+  // should have a 1 in column 22.
+  const resType = (f.tensors['res_type']!.data as BigInt64Array)
+  const NUM_TOKENS = f.tensors['res_type']!.shape[2]
+  let unkHits = 0
+  for (let n = 0; n < f.N; n++) {
+    if (resType[n * NUM_TOKENS + 22] === 1n) unkHits++
+  }
+  expect('all ligand tokens res_type=UNK(22)', unkHits === f.N, `${unkHits}/${f.N}`)
+
+  // atom_backbone_feat: every ligand atom should hit channel 0 (sidechain/off-list).
+  const abf = int64ToArray(f.tensors['atom_backbone_feat']!.data as BigInt64Array)
+  let ch0Hits = 0
+  for (let a = 0; a < hem.num_atoms; a++) {
+    if (abf[a * 17 + 0]) ch0Hits++
+  }
+  expect('all ligand atoms on channel 0', ch0Hits === hem.num_atoms, `${ch0Hits}/${hem.num_atoms}`)
+
+  // atom_to_token: 1:1 mapping — atom a points at token a (within the ligand
+  // block). Verify by checking the diagonal of the [A, N] one-hot.
+  const a2t = int64ToArray(f.tensors['atom_to_token']!.data as BigInt64Array)
+  let diagHits = 0
+  for (let a = 0; a < hem.num_atoms; a++) {
+    if (a2t[a * f.N + a] === 1) diagHits++
+  }
+  expect('atom_to_token is identity in ligand region', diagHits === hem.num_atoms)
+
+  // All atoms share one augmentation group → ref_space_uid is constant.
+  const refUid = int64ToArray(f.tensors['ref_space_uid']!.data as BigInt64Array)
+  const uidsInLigand = new Set(refUid.slice(0, hem.num_atoms))
+  expect('ref_space_uid constant within ligand', uidsInLigand.size === 1)
+
+  // residue_index = 0 for every ligand atom-token (one residue per ligand).
+  const resIdx = int64ToArray(f.tensors['residue_index']!.data as BigInt64Array)
+  expect('residue_index = 0 for all ligand tokens', resIdx.every((v) => v === 0))
+
+  // Constraint tensors: HEM has 0 chiral, 4 stereo, 2 planar bonds, 2 ring5,
+  // 0 ring6, 903 rdkit bounds. Verify each tensor's trailing K dim matches.
+  expect('chiral_atom_index K = 1 (padded, HEM has no chir)',
+    f.tensors['chiral_atom_index']!.shape[2] === 1)
+  expect('stereo_bond_index K = 4',
+    f.tensors['stereo_bond_index']!.shape[2] === 4, JSON.stringify(f.tensors['stereo_bond_index']!.shape))
+  expect('planar_bond_index K = 2',
+    f.tensors['planar_bond_index']!.shape[2] === 2, JSON.stringify(f.tensors['planar_bond_index']!.shape))
+  expect('planar_ring_5_index K = 2',
+    f.tensors['planar_ring_5_index']!.shape[2] === 2)
+  expect('planar_ring_6_index K = 1 (HEM has none)',
+    f.tensors['planar_ring_6_index']!.shape[2] === 1)
+  expect('rdkit_bounds_index K = 903',
+    f.tensors['rdkit_bounds_index']!.shape[2] === 903)
+
+  // token_bonds: HEM has 50 bonds; each becomes 2 entries (symmetric) in the
+  // NxN matrix, so we expect 100 cells to be 1.0 inside the ligand block.
+  const tokenBonds = f.tensors['token_bonds']!.data as Float32Array
+  let bondCells = 0
+  for (let i = 0; i < f.N; i++) {
+    for (let j = 0; j < f.N; j++) {
+      if (tokenBonds[i * f.N + j] === 1) bondCells++
+    }
+  }
+  expect('token_bonds has 2 × 50 = 100 entries for HEM', bondCells === 100,
+    `got ${bondCells}`)
+}
+
+console.log('— Mixed: protein + HEM ligand (offset check) —')
+{
+  const hem = loadBlob('HEM')
+  const f = featurizeChains([
+    { sequence: SEQ_A, type: 'protein' },
+    { sequence: 'HEM', type: 'ligand', blob: hem },
+  ])
+  // Tokens: SEQ_A (20) + HEM atoms (43) = 63
+  expect('N = 20 + 43', f.N === SEQ_A.length + hem.num_atoms, `got ${f.N}`)
+
+  // asym_id: protein region = 0, ligand region = 1
+  const asym = int64ToArray(f.tensors['asym_id']!.data as BigInt64Array)
+  const protAsym = asym.slice(0, SEQ_A.length).every((v) => v === 0)
+  const ligAsym = asym.slice(SEQ_A.length).every((v) => v === 1)
+  expect('protein asym_id = 0', protAsym)
+  expect('ligand asym_id = 1', ligAsym)
+
+  // Constraint indices for HEM should be offset by the protein's atom count.
+  // Find the first chiral row (HEM has 0 → empty) — use stereo instead.
+  const stereo = int64ToArray(f.tensors['stereo_bond_index']!.data as BigInt64Array)
+  const K_sb = f.tensors['stereo_bond_index']!.shape[2]
+  expect('stereo K = 4', K_sb === 4)
+  // Every index in stereo should be >= protein_atom_count (offset applied).
+  // Find protein atom count by scanning atom_pad_mask of the smaller protein-only call:
+  const protOnly = featurizeChains([{ sequence: SEQ_A, type: 'protein' }])
+  const protAtoms = (protOnly.tensors['atom_pad_mask']!.data as Float32Array)
+    .reduce((acc, v) => acc + (v ? 1 : 0), 0)
+  const minStereoIdx = Math.min(...stereo.slice(0, 4 * K_sb).filter((v) => v >= 0))
+  expect(`stereo indices >= protein atom count (${protAtoms})`,
+    minStereoIdx >= protAtoms, `min stereo idx = ${minStereoIdx}, expected >= ${protAtoms}`)
 }
 
 console.log('— Sanity: NxN tensors scale with total N —')

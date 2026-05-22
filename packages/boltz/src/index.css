@@ -1,10 +1,123 @@
 @import "tailwindcss";
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Type system — Perun Sans for display & body (Braun / World Book register),
+ * NK57 Monospace (Normal width) for sequences, codes, numerics, and tags.
+ * Italics are loaded so the parser can substitute properly under emphasis.
+ * Only the matched faces are actually fetched by the browser.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
 @font-face {
-  font-family: "Gallant";
-  src: url("/fonts/gallant.ttf") format("truetype");
-  font-weight: 100 900;
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-Light.ttf") format("truetype");
+  font-weight: 300;
   font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-LightItalic.ttf") format("truetype");
+  font-weight: 300;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-Italic.ttf") format("truetype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-MediumItalic.ttf") format("truetype");
+  font-weight: 500;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-SemiBoldItalic.ttf") format("truetype");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Perun Sans";
+  src: url("/fonts/perun-sans/TTF/Perun-BoldItalic.ttf") format("truetype");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Rg.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Rg%20It.otf") format("opentype");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Sb.otf") format("opentype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Sb%20It.otf") format("opentype");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Bd.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NK57 Monospace";
+  src: url("/fonts/nk57-monospace/NK57%20Monospace%20No%20Bd%20It.otf") format("opentype");
+  font-weight: 700;
+  font-style: italic;
   font-display: swap;
 }
 
@@ -45,7 +158,9 @@
   --rule: oklch(0.74 0.025 60);
   --oxblood: var(--primary);
   --brass: oklch(0.7 0.11 80);
-  --font-display: "Gallant", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-display: "Perun Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-sans: "Perun Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: "NK57 Monospace", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -103,6 +218,8 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 * {
@@ -117,19 +234,12 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: "Gallant", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Retro pixelated rendering for large logotypes and headings.
- * Gallant is monospaced, so we differentiate purely with size + color;
- * disabling smoothing on large sizes lets the bitmap-style glyphs read
- * crisply, while body text keeps subpixel antialiasing for legibility. */
-.font-pixel,
-h1 {
-  -webkit-font-smoothing: none;
-  -moz-osx-font-smoothing: unset;
-  font-smooth: never;
-  text-rendering: geometricPrecision;
+code, kbd, pre, samp {
+  font-family: var(--font-mono);
 }

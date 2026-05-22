@@ -50,6 +50,13 @@ export interface PredictOptions {
   samplingSteps?: number
   seed?: number
   onProgress?: (e: ProgressEvent) => void
+  /**
+   * Per-step denoised coordinates for live visualization. Called after each
+   * sampling step with the model's projected final structure at that level.
+   * Receives a defensive copy so the caller may retain it without worrying
+   * about downstream mutation. Throttle in the consumer; this fires every step.
+   */
+  onStep?: (denoisedCoords: Float32Array, step: number, total: number) => void
 }
 
 export type ProgressEvent =
@@ -324,6 +331,12 @@ export async function predict(opts: PredictOptions): Promise<PredictResult> {
       total: samplingSteps,
       sigma: sigmaTm,
     })
+    if (opts.onStep) {
+      // Hand the consumer a defensive copy. atomCoordsDenoised is the
+      // model's projected final at this denoising level — emits as a
+      // monotonic condensation from noise to structure when streamed.
+      opts.onStep(new Float32Array(atomCoordsDenoised), step + 1, samplingSteps)
+    }
   }
 
   // ─── Confidence ────────────────────────────────────────────────────────

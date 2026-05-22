@@ -12,3 +12,5 @@ dist
 coverage
 *.log
 *.bak
+__pycache__/
+*.pyc

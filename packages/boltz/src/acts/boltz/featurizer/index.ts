@@ -30,6 +30,7 @@ import {
   NUM_TOKENS,
   residueTopology,
 } from './tables'
+import type { LigandBlob } from './ligand'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chain input model
@@ -41,10 +42,13 @@ import {
 // `featurizeChains(chains)` directly.
 
 export interface ChainInput {
-  /** Raw sequence text. 1-letter codes for protein/RNA/DNA. Whitespace stripped. */
+  /** For protein/RNA/DNA: residue letter string. For ligand: CCD 3-letter code. */
   sequence: string
-  /** Entity type. Protein, RNA, or DNA. */
+  /** Entity type. Protein, RNA, DNA, or ligand (NONPOLYMER). */
   type: ChainType
+  /** Required for `type: 'ligand'`. Loaded via loadLigandBlob() before
+   *  featurizeChains is called. Unused for polymer chains. */
+  blob?: LigandBlob
 }
 
 interface ChainMeta {
@@ -66,10 +70,14 @@ function assignChainMeta(chains: ChainInput[]): ChainMeta[] {
   const out: ChainMeta[] = []
   for (let i = 0; i < chains.length; i++) {
     const c = chains[i]
-    if (c.type !== 'protein' && c.type !== 'rna' && c.type !== 'dna') {
+    if (c.type !== 'protein' && c.type !== 'rna' && c.type !== 'dna' && c.type !== 'ligand') {
       throw new Error(`Unsupported chain type: ${c.type}`)
     }
-    const key = `${c.type}:${c.sequence}`
+    if (c.type === 'ligand' && !c.blob) {
+      throw new Error(`Ligand chain '${c.sequence}' is missing its blob — call loadLigandBlob() first`)
+    }
+    // Homomer detection keys: polymer uses (type, sequence); ligand uses (type, ccd).
+    const key = c.type === 'ligand' ? `ligand:${c.blob!.ccd}` : `${c.type}:${c.sequence}`
     let entityId = entityIdByKey.get(key)
     if (entityId === undefined) {
       entityId = entityIdByKey.size
@@ -149,9 +157,12 @@ function augmentRefPosPerResidue(
 // Atom enumeration
 
 interface AtomEntry {
-  /** Global token index (0..N-1 across all chains). Used for ref_space_uid and atom_to_token. */
-  residueIdx: number
-  /** Original index into the topology's `atoms[]` list (load-bearing for center/disto/backbone maps). */
+  /** Token this atom maps to (atom_to_token target). 1:1 for ligand, many:1 for polymer. */
+  tokenIdx: number
+  /** Augmentation-group id (= ref_space_uid). One per polymer residue, one per
+   *  ligand chain. Atoms in the same group share a Haar rotation + translation. */
+  augGroupId: number
+  /** Original index into the topology's `atoms[]` list. -1 for ligand atoms (they have no topology). */
   atomOrigIdx: number
   name: string
   element: number
@@ -163,61 +174,113 @@ interface AtomEntry {
 interface TokenMeta {
   /** Owning chain's index into the input list. */
   chainIdx: number
-  /** Position within the owning chain (0-based, restarts per chain). */
+  /** Position within the owning chain (0-based, restarts per chain). For
+   *  ligand tokens all atoms in one ligand share residueInChainIdx=0
+   *  (matches Boltz: a CCD ligand is one residue, even though each atom is a token). */
   residueInChainIdx: number
-  /** Single-letter code for this token (for letterToTokenId / letterToResName). */
+  /** Single-letter code for polymer tokens; '' for ligand. */
   letter: string
+}
+
+interface LigandSlice {
+  asymId: number
+  /** First atom in the global atoms[] array for this ligand chain. */
+  atomOffset: number
+  /** First token in the global token stream for this ligand chain. */
+  tokenOffset: number
+  blob: LigandBlob
 }
 
 interface AtomEnumeration {
   atoms: AtomEntry[]
-  /** atom indices grouped per global token. `byResidue[n]` lists emitted-atom-indices belonging to token n. */
-  byResidue: number[][]
-  /** First emitted atom index for each global token. */
-  residueStart: number[]
-  /**
-   * Per token: orig-atom-idx → emitted-atom-idx (or -1 if dropped).
-   * Used to translate center/disto/backbone indices through the leaving-atom filter.
-   */
-  origToEmittedPerResidue: number[][]
-  /** Per-token metadata, length = N (sum of chain lengths). */
+  /** Atom indices grouped per augmentation group. byAugGroup[g] is the list
+   *  of atom indices that rotate/translate together. */
+  byAugGroup: number[][]
+  /** For each token n: the first emitted atom index of that token. For ligand
+   *  tokens, the token's single atom. For polymer tokens, the residue's first
+   *  surviving atom. */
+  tokenAtomStart: number[]
+  /** For each polymer token: map from topo-orig-atom-idx → emitted-atom-idx
+   *  (or -1 if dropped). For ligand tokens: empty (unused). */
+  origToEmittedPerToken: number[][]
+  /** Per-token metadata, length = N. */
   tokens: TokenMeta[]
-  /** Per-chain metadata, length = chains.length. */
+  /** Per-chain metadata. */
   chains: ChainMeta[]
+  /** Ligand chains in order — needed for Section H constraint assembly. */
+  ligandSlices: LigandSlice[]
 }
 
 function enumerateAtoms(chains: ChainInput[]): AtomEnumeration {
   const chainMeta = assignChainMeta(chains)
   const atoms: AtomEntry[] = []
-  const byResidue: number[][] = []
-  const residueStart: number[] = []
-  const origToEmittedPerResidue: number[][] = []
+  const byAugGroup: number[][] = []
+  const tokenAtomStart: number[] = []
+  const origToEmittedPerToken: number[][] = []
   const tokens: TokenMeta[] = []
+  const ligandSlices: LigandSlice[] = []
 
   for (let c = 0; c < chains.length; c++) {
-    const seq = chains[c].sequence
-    const type = chains[c].type
+    const ch = chains[c]
+    if (ch.type === 'ligand') {
+      // Ligand chain: each atom in the blob becomes both a token AND an atom.
+      // All atoms share one augmentation group (the ligand frame).
+      const blob = ch.blob!
+      const augGroupId = byAugGroup.length
+      const groupAtoms: number[] = []
+      byAugGroup.push(groupAtoms)
+      const slice: LigandSlice = {
+        asymId: c,
+        atomOffset: atoms.length,
+        tokenOffset: tokens.length,
+        blob,
+      }
+      ligandSlices.push(slice)
+      for (let i = 0; i < blob.atoms.length; i++) {
+        const a = blob.atoms[i]
+        const tokenIdx = tokens.length
+        tokens.push({ chainIdx: c, residueInChainIdx: 0, letter: '' })
+        tokenAtomStart.push(atoms.length)
+        origToEmittedPerToken.push([])
+        groupAtoms.push(atoms.length)
+        atoms.push({
+          tokenIdx,
+          augGroupId,
+          atomOrigIdx: -1,
+          name: a.name,
+          element: a.element,
+          charge: a.charge,
+          chiralityId: a.chirality_id,
+          refPos: a.ref_pos,
+        })
+      }
+      continue
+    }
+
+    // Polymer chain: walk residues, emit one token per residue and one atom
+    // per non-leaving topology atom. augGroup is per residue.
+    const seq = ch.sequence
     for (let r = 0; r < seq.length; r++) {
-      const globalN = tokens.length
+      const tokenIdx = tokens.length
+      const augGroupId = byAugGroup.length
       tokens.push({ chainIdx: c, residueInChainIdx: r, letter: seq[r] })
-      residueStart.push(atoms.length)
-      const indicesHere: number[] = []
-      byResidue.push(indicesHere)
-      const resName = letterToResName(seq[r], type)
-      const topo = residueTopology(resName, type)
+      tokenAtomStart.push(atoms.length)
+      const groupAtoms: number[] = []
+      byAugGroup.push(groupAtoms)
+      const resName = letterToResName(seq[r], ch.type)
+      const topo = residueTopology(resName, ch.type)
       const map = new Array<number>(topo.atoms.length).fill(-1)
-      origToEmittedPerResidue.push(map)
+      origToEmittedPerToken.push(map)
       for (let aIdx = 0; aIdx < topo.atoms.length; aIdx++) {
         const a = topo.atoms[aIdx]
-        // Drop leaving atoms (OXT for proteins) — *every* residue, including
-        // the C-terminal. Empirically matches the v0.1 Python featurizer's
-        // behavior (the SPEC.md said "keep on C-term" but Boltz's own
-        // featurizer flow drops it during the structure-from-sequence path).
+        // Drop leaving atoms (OXT for proteins) — every residue including
+        // C-terminal. Matches Boltz's structure-from-sequence path.
         if (a.leaving) continue
         map[aIdx] = atoms.length
-        indicesHere.push(atoms.length)
+        groupAtoms.push(atoms.length)
         atoms.push({
-          residueIdx: globalN,
+          tokenIdx,
+          augGroupId,
           atomOrigIdx: aIdx,
           name: a.name,
           element: a.element,
@@ -229,7 +292,15 @@ function enumerateAtoms(chains: ChainInput[]): AtomEnumeration {
     }
   }
 
-  return { atoms, byResidue, residueStart, origToEmittedPerResidue, tokens, chains: chainMeta }
+  return {
+    atoms,
+    byAugGroup,
+    tokenAtomStart,
+    origToEmittedPerToken,
+    tokens,
+    chains: chainMeta,
+    ligandSlices,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -299,8 +370,10 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
   for (const c of chains) {
     if (c.sequence.length === 0) throw new Error('Empty sequence in chain')
   }
-  const N = chains.reduce((acc, c) => acc + c.sequence.length, 0)
   const enum_ = enumerateAtoms(chains)
+  // Total token count: one per polymer residue, one per ligand atom. Read from
+  // the enumeration so the ligand branch (where N != sequence.length) lines up.
+  const N = enum_.tokens.length
   const A_real = enum_.atoms.length
   const A = Math.ceil(A_real / ATOM_WINDOW_W) * ATOM_WINDOW_W
   const K = A / ATOM_WINDOW_W
@@ -405,7 +478,7 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
 
     for (let a = 0; a < A_real; a++) {
       const at = enum_.atoms[a]
-      const ownerType = enum_.chains[enum_.tokens[at.residueIdx].chainIdx].type
+      const ownerType = enum_.chains[enum_.tokens[at.tokenIdx].chainIdx].type
       plddtArr[a] = 1
       refPosArr[a * 3]     = at.refPos[0]
       refPosArr[a * 3 + 1] = at.refPos[1]
@@ -413,7 +486,7 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
       refElementArr[a * NUM_ELEMENTS + at.element] = 1n
       refChargeArr[a] = at.charge
       refChiralityArr[a] = BigInt(at.chiralityId)
-      refSpaceUidArr[a] = BigInt(at.residueIdx)
+      refSpaceUidArr[a] = BigInt(at.augGroupId)
       atomPadArr[a] = 1
       atomResolvedArr[a] = 1
       // ref_atom_name_chars: 4 chars × 64 vocab; pad name with spaces.
@@ -435,7 +508,7 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
     // random Haar rotation + N(0, 1) translation. Trained net is invariant
     // to which rotation we pick; without this step the model receives
     // un-augmented input and produces collapsed coords.
-    augmentRefPosPerResidue(refPosArr, enum_.byResidue)
+    augmentRefPosPerResidue(refPosArr, enum_.byAugGroup)
     // Padding rows already zero-initialised. bfactor / plddt / coords stay zero.
 
     add(refPos)
@@ -472,15 +545,32 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
 
     for (let a = 0; a < A_real; a++) {
       const at = enum_.atoms[a]
-      atomToTokenArr[a * N + at.residueIdx] = 1n
+      atomToTokenArr[a * N + at.tokenIdx] = 1n
     }
 
     for (let n = 0; n < N; n++) {
       const tok = enum_.tokens[n]
       const type = enum_.chains[tok.chainIdx].type
+      if (type === 'ligand') {
+        // Each ligand atom IS a token (1:1). center/rep/r-set all point at
+        // the token's own atom. frames_idx isn't used (frame_resolved_mask
+        // stays false), but we still need to write something — zeros match
+        // Boltz's convention for non-polymer frames.
+        const atomIdx = enum_.tokenAtomStart[n]
+        if (atomIdx >= 0) {
+          tokenToCenterArr[n * A + atomIdx] = 1n
+          tokenToRepArr[n * A + atomIdx] = 1n
+          rSetToRepArr[n * A + atomIdx] = 1n
+        }
+        framesIdxArr[n * 3]     = 0n
+        framesIdxArr[n * 3 + 1] = 0n
+        framesIdxArr[n * 3 + 2] = 0n
+        continue
+      }
+      // Polymer token: pick center/disto/backbone via residue topology.
       const resName = letterToResName(tok.letter, type)
       const topo = residueTopology(resName, type)
-      const map = enum_.origToEmittedPerResidue[n]
+      const map = enum_.origToEmittedPerToken[n]
       const centerEmitted = map[topo.center_atom_idx]
       const distoEmitted = map[topo.disto_atom_idx]
       if (centerEmitted >= 0) tokenToCenterArr[n * A + centerEmitted] = 1n
@@ -488,8 +578,7 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
         tokenToRepArr[n * A + distoEmitted] = 1n
       }
       // r_set_to_rep_atom uses the *center* atom (Cα), not the disto atom.
-      // SPEC.md said it was identical to token_to_rep_atom; verified against
-      // 1L2Y golden that it actually mirrors token_to_center_atom.
+      // Verified against 1L2Y golden that it mirrors token_to_center_atom.
       if (centerEmitted >= 0) {
         rSetToRepArr[n * A + centerEmitted] = 1n
       }
@@ -513,11 +602,31 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
 
   // ── D. Token-pair features ───────────────────────────────────────────────
   {
-    // token_bonds and type_bonds carry only *non-polymer* (CCD-level) bonds
-    // and explicit user constraints. The peptide backbone is implicit via
-    // residue_index ordering; do NOT mark adjacent residues here.
+    // token_bonds and type_bonds carry *non-polymer* (CCD-level) bonds and
+    // explicit user constraints. The peptide / nucleic backbone is implicit
+    // via residue_index ordering — for those we leave the matrices at 0.
+    // For ligand chains every atom is its own token, so the bond graph the
+    // trunk needs lives entirely in these two NxN matrices. Without this,
+    // ligand atoms get scattered (the trunk can't tell which atoms are
+    // bonded; HEM emerges as a cloud of free atoms rather than a porphyrin).
     const tokenBonds = tensor('token_bonds', [B, N, N, 1], 'float32')
     const typeBonds = tensor('type_bonds', [B, N, N], 'int64')
+    const tokenBondsArr = tokenBonds.data as Float32Array
+    const typeBondsArr = typeBonds.data as BigInt64Array
+    for (const slice of enum_.ligandSlices) {
+      for (const b of slice.blob.bonds) {
+        // Each ligand atom IS a token; offset by tokenOffset to land in the
+        // global token index space.
+        const ti = slice.tokenOffset + b.i
+        const tj = slice.tokenOffset + b.j
+        // Symmetric upper/lower fill so the trunk's attention sees both
+        // directions of the bond.
+        tokenBondsArr[ti * N + tj] = 1
+        tokenBondsArr[tj * N + ti] = 1
+        typeBondsArr[ti * N + tj] = BigInt(b.type_id)
+        typeBondsArr[tj * N + ti] = BigInt(b.type_id)
+      }
+    }
     void BOND_TYPE_SINGLE_ID
 
     // contact_conditioning: one-hot at channel 0 for every pair in the
@@ -546,8 +655,6 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
       }
     }
 
-    void tokenBonds
-    void typeBonds
     void contactThreshold
 
     add(tokenBonds)
@@ -622,33 +729,164 @@ export function featurizeChains(chainsInput: ChainInput[]): FeatsBundle {
     add(ensembleRefIdxs)
   }
 
-  // ── H. Stub tensors (last axis = 1, zero-filled) ─────────────────────────
-  // v0.1 F11 hotfix: the trunk/diffusion/confidence graphs were re-exported
-  // with size-1 padded axes (rather than size-0) so ORT-Web's WebGPU backend
-  // can compile their Concat kernels. The model is invariant to this dummy
-  // dimension — pLDDT matches the size-0 baseline to within calibration noise.
+  // ── H. Per-ligand geometry constraints ───────────────────────────────────
+  // The five per-molecule constraint groups (rdkit bounds, chiral atoms,
+  // stereo bonds, planar bonds, planar rings 5/6) are aggregated across all
+  // ligand chains with atom indices shifted by each ligand's atomOffset.
+  // When no ligands are present, every K collapses to 0 and we fall back to
+  // the F11 hotfix: size-1 zero-filled trailing axis so ORT-Web's Concat
+  // kernels can compile. Polymer-only inputs are byte-identical to the
+  // pre-ligand path through the trunk.
+  //
+  // The cross-chain / user-constraint group (connected_*, contact_*,
+  // symmetric_chain_index) stays size-1 zero-filled. Inter-chain disulfides
+  // and pocket constraints are deferred to a later phase; empirically the
+  // model tolerates these zero-padded for everything we test.
   {
-    add(tensor('chiral_atom_index',          [B, 4, 1], 'int64'))
-    add(tensor('chiral_atom_orientations',   [B, 1],    'bool'))
-    add(tensor('chiral_reference_mask',      [B, 1],    'bool'))
-    add(tensor('connected_atom_index',       [B, 2, 1], 'int64'))
-    add(tensor('connected_chain_index',      [B, 2, 1], 'int64'))
-    add(tensor('contact_negation_mask',      [B, 1],    'bool'))
-    add(tensor('contact_pair_index',         [B, 2, 1], 'int64'))
-    add(tensor('contact_thresholds',         [B, 1],    'float32'))
-    add(tensor('contact_union_index',        [B, 1],    'int64'))
-    add(tensor('planar_bond_index',          [B, 6, 1], 'int64'))
-    add(tensor('planar_ring_5_index',        [B, 5, 1], 'int64'))
-    add(tensor('planar_ring_6_index',        [B, 6, 1], 'int64'))
-    add(tensor('rdkit_bounds_angle_mask',    [B, 1],    'bool'))
-    add(tensor('rdkit_bounds_bond_mask',     [B, 1],    'bool'))
-    add(tensor('rdkit_bounds_index',         [B, 2, 1], 'int64'))
-    add(tensor('rdkit_lower_bounds',         [B, 1],    'float32'))
-    add(tensor('rdkit_upper_bounds',         [B, 1],    'float32'))
-    add(tensor('stereo_bond_index',          [B, 4, 1], 'int64'))
-    add(tensor('stereo_bond_orientations',   [B, 1],    'bool'))
-    add(tensor('stereo_reference_mask',      [B, 1],    'bool'))
-    add(tensor('symmetric_chain_index',      [B, 2, 1], 'int64'))
+    // Aggregate from all ligand slices, applying atomOffset to each index.
+    const chiralRows: number[][] = []          // [a, b, c, d] per row
+    const chiralRef: number[] = []
+    const chiralOrient: number[] = []
+    const stereoRows: number[][] = []          // [a, b, c, d]
+    const stereoCheck: number[] = []
+    const stereoOrient: number[] = []
+    const planarBondRows: number[][] = []      // [6 atom indices]
+    const planar5Rows: number[][] = []         // [5]
+    const planar6Rows: number[][] = []         // [6]
+    const rdkitRows: number[][] = []           // [i, j]
+    const rdkitBondMask: number[] = []
+    const rdkitAngleMask: number[] = []
+    const rdkitLower: number[] = []
+    const rdkitUpper: number[] = []
+
+    for (const slice of enum_.ligandSlices) {
+      const off = slice.atomOffset
+      for (const c of slice.blob.chiral_atoms) {
+        chiralRows.push(c.atoms.map((i) => i + off))
+        chiralRef.push(c.is_reference ? 1 : 0)
+        chiralOrient.push(c.is_r ? 1 : 0)
+      }
+      for (const s of slice.blob.stereo_bonds) {
+        stereoRows.push(s.atoms.map((i) => i + off))
+        stereoCheck.push(s.is_check ? 1 : 0)
+        stereoOrient.push(s.is_e ? 1 : 0)
+      }
+      for (const p of slice.blob.planar_bonds) {
+        planarBondRows.push(p.atoms.map((i) => i + off))
+      }
+      for (const p of slice.blob.planar_rings_5) {
+        planar5Rows.push(p.atoms.map((i) => i + off))
+      }
+      for (const p of slice.blob.planar_rings_6) {
+        planar6Rows.push(p.atoms.map((i) => i + off))
+      }
+      for (const r of slice.blob.rdkit_bounds) {
+        rdkitRows.push([r.i + off, r.j + off])
+        rdkitBondMask.push(r.is_bond ? 1 : 0)
+        rdkitAngleMask.push(r.is_angle ? 1 : 0)
+        rdkitLower.push(r.lower)
+        rdkitUpper.push(r.upper)
+      }
+    }
+
+    // K=1 when empty so the trunk's existing exported shape (F11 hotfix)
+    // continues to satisfy ORT-Web's Concat kernel.
+    const padK = (k: number) => Math.max(k, 1)
+
+    // [B, axis, K] writer: writes row k's `axis`-tuple along the trailing dim.
+    const writeRows = (t: FeatsTensor, rows: number[][], rowLen: number) => {
+      const arr = t.data as BigInt64Array
+      const K = t.shape[2]
+      for (let k = 0; k < rows.length; k++) {
+        for (let i = 0; i < rowLen; i++) {
+          arr[i * K + k] = BigInt(rows[k][i])
+        }
+      }
+    }
+    // [B, K] writer: bool / float / int64 masks indexed by k.
+    const writeMaskBool = (t: FeatsTensor, values: number[]) => {
+      const arr = t.data as Uint8Array
+      for (let k = 0; k < values.length; k++) arr[k] = values[k]
+    }
+    const writeMaskF32 = (t: FeatsTensor, values: number[]) => {
+      const arr = t.data as Float32Array
+      for (let k = 0; k < values.length; k++) arr[k] = values[k]
+    }
+
+    // Chiral
+    {
+      const K_ = padK(chiralRows.length)
+      const idx = tensor('chiral_atom_index', [B, 4, K_], 'int64')
+      writeRows(idx, chiralRows, 4)
+      add(idx)
+      const orient = tensor('chiral_atom_orientations', [B, K_], 'bool')
+      writeMaskBool(orient, chiralOrient)
+      add(orient)
+      const ref = tensor('chiral_reference_mask', [B, K_], 'bool')
+      writeMaskBool(ref, chiralRef)
+      add(ref)
+    }
+    // Stereo
+    {
+      const K_ = padK(stereoRows.length)
+      const idx = tensor('stereo_bond_index', [B, 4, K_], 'int64')
+      writeRows(idx, stereoRows, 4)
+      add(idx)
+      const orient = tensor('stereo_bond_orientations', [B, K_], 'bool')
+      writeMaskBool(orient, stereoOrient)
+      add(orient)
+      const ref = tensor('stereo_reference_mask', [B, K_], 'bool')
+      writeMaskBool(ref, stereoCheck)
+      add(ref)
+    }
+    // Planar bonds / rings
+    {
+      const K_ = padK(planarBondRows.length)
+      const idx = tensor('planar_bond_index', [B, 6, K_], 'int64')
+      writeRows(idx, planarBondRows, 6)
+      add(idx)
+    }
+    {
+      const K_ = padK(planar5Rows.length)
+      const idx = tensor('planar_ring_5_index', [B, 5, K_], 'int64')
+      writeRows(idx, planar5Rows, 5)
+      add(idx)
+    }
+    {
+      const K_ = padK(planar6Rows.length)
+      const idx = tensor('planar_ring_6_index', [B, 6, K_], 'int64')
+      writeRows(idx, planar6Rows, 6)
+      add(idx)
+    }
+    // RDKit bounds
+    {
+      const K_ = padK(rdkitRows.length)
+      const idx = tensor('rdkit_bounds_index', [B, 2, K_], 'int64')
+      writeRows(idx, rdkitRows, 2)
+      add(idx)
+      const bondMask = tensor('rdkit_bounds_bond_mask', [B, K_], 'bool')
+      writeMaskBool(bondMask, rdkitBondMask)
+      add(bondMask)
+      const angleMask = tensor('rdkit_bounds_angle_mask', [B, K_], 'bool')
+      writeMaskBool(angleMask, rdkitAngleMask)
+      add(angleMask)
+      const lower = tensor('rdkit_lower_bounds', [B, K_], 'float32')
+      writeMaskF32(lower, rdkitLower)
+      add(lower)
+      const upper = tensor('rdkit_upper_bounds', [B, K_], 'float32')
+      writeMaskF32(upper, rdkitUpper)
+      add(upper)
+    }
+    // Cross-chain / user-constraint group — kept zero-filled. Confirmed
+    // polymer-invariant in the polymer phase; for ligand prediction the
+    // small molecule's intra-graph constraints are what matters.
+    add(tensor('connected_atom_index',  [B, 2, 1], 'int64'))
+    add(tensor('connected_chain_index', [B, 2, 1], 'int64'))
+    add(tensor('contact_negation_mask', [B, 1],    'bool'))
+    add(tensor('contact_pair_index',    [B, 2, 1], 'int64'))
+    add(tensor('contact_thresholds',    [B, 1],    'float32'))
+    add(tensor('contact_union_index',   [B, 1],    'int64'))
+    add(tensor('symmetric_chain_index', [B, 2, 1], 'int64'))
   }
 
   return {

@@ -11,25 +11,38 @@
  *   ▶ WebGPU debug
  */
 import { BoltzCanvas, BoltzInput, BoltzOutput } from './acts/boltz/BoltzAct'
+import { LigandDrawer } from './acts/boltz/LigandDrawer'
+import { GemShellDrawer } from './acts/boltz/GemShellDrawer'
 import { WebGpuDebug } from './debug/WebGpuDebug'
+import { GemLogo } from './components/GemLogo'
 
 export function App() {
   return (
     <div className="flex min-h-screen flex-col">
       <header
-        className="border-b px-6 py-3"
+        className="border-b px-6 py-2"
         style={{ borderColor: 'var(--rule)' }}
       >
-        <div className="flex items-baseline justify-between">
-          <h1
-            className="text-lg font-medium tracking-tight"
-            style={{
-              fontFamily: 'var(--font-display)',
-              color: 'var(--foreground)',
-            }}
-          >
-            Corundum · Boltz
-          </h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <GemLogo
+              size={56}
+              title="Corundum"
+              onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            />
+            <h1
+              className="text-2xl"
+              style={{
+                fontFamily: 'var(--font-display)',
+                color: 'var(--foreground)',
+                fontWeight: 600,
+                letterSpacing: '-0.015em',
+                lineHeight: 1,
+              }}
+            >
+              Corundum<span style={{ color: 'var(--ink-faded)', margin: '0 0.45em', fontWeight: 300 }}>/</span><span style={{ fontWeight: 400 }}>Boltz-2</span>
+            </h1>
+          </div>
           <span
             className="font-mono text-[10px] uppercase tracking-widest"
             style={{ color: 'var(--ink-faded)' }}
@@ -51,6 +64,8 @@ export function App() {
         </Pane>
       </main>
 
+      <LigandDrawer />
+      <GemShellDrawer />
       <WebGpuDebug />
 
       <footer

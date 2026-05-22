@@ -1,33 +1,30 @@
 /**
- * MolViewer — headless Mol* embed.
+ * MolViewer — headless Mol* embed, jewelry register.
  *
- * We deliberately avoid `createPluginUI` because Mol*'s default layout
- * paints sequence / log / structure-tools panels at fixed positions that
- * escape our card. The headless `PluginContext` route gives us just the
- * 3D canvas; the field guide owns the surrounding chrome.
+ * Three Mol*-rendered representations on the metal armature:
+ *   - putty wire (backbone, pLDDT-thickened metal filigree)
+ *   - ball-and-stick on polymer (side chains as articulated metalwork)
+ *   - ball-and-stick on ligand (geometric metal centerpiece)
  *
- * Two render modes live here:
- *   - 'cartoon' — Mol*'s `default` preset (ribbon/planks/arrows by
- *     secondary structure, chain-id colors). The conventional view.
- *   - 'glass' — a putty (smooth-tube) representation with a translucent
- *     low-roughness material and B-factor-driven size & color themes.
- *     Because the mmCIF writer stuffs pLDDT × 100 into B_iso_or_equiv,
- *     the tube naturally thickens and saturates at high-confidence
- *     residues — the "gem with veins" effect, free, from data we
- *     already wrote.
+ * The gem shell is rendered by a separate Three.js overlay
+ * (`RefractiveShell`) stacked on top of the Mol* canvas, because Mol*'s
+ * material model has no IOR / transmission — it can't do real refraction.
+ * The overlay polls Mol*'s camera state every frame and mirrors it onto
+ * its own PerspectiveCamera, so orbiting Mol* drags the gem with it.
  *
- * Glass-mode tuning is split across two effects so that postprocessing
- * sliders (bloom/exposure) don't trigger a full structure rebuild and
- * remain smooth under continuous drag.
+ * The full parameter bundle for each metal lives in jewelry-presets.json
+ * so the user can tweak in-app and write the final look back to that file
+ * via the dev-only Vite middleware (see vite.config.ts).
  *
- * Implementation notes:
- *   - `position: absolute; inset: 0` on the canvas inside an `overflow:
- *     hidden` container so any future popups Mol* draws stay inside the
- *     card.
- *   - Strict-mode safe: we track `cancelled` so the second StrictMode
- *     mount-then-unmount cycle doesn't leave an orphan plugin.
+ * Two effects on the Mol* side:
+ *   - Effect 1 rebuilds reps on structure/metal/rep-affecting param changes.
+ *   - Effect 2 applies cheap canvas3d-only props (bg, exposure, bloom,
+ *     lighting) for smooth slider drag without geometry rebuild.
+ *
+ * Strict-mode safe: `cancelled` flag prevents orphan plugins on the
+ * second mount-then-unmount cycle.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 
 import 'molstar/build/viewer/molstar.css'
 
@@ -35,177 +32,167 @@ import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec'
 import { PluginContext } from 'molstar/lib/mol-plugin/context'
 import { Color } from 'molstar/lib/mol-util/color'
 
+import defaultPresets from './jewelry-presets.json'
+import { extractAtomPositions } from './atomParser'
+import {
+  LiquidGlass,
+  type CameraSnapshot,
+  type LiquidGlassParams,
+} from './LiquidGlass'
+import { RefractiveShell, type GemPreset } from './RefractiveShell'
+import { useGemShellStore } from './GemShellDrawer'
+import type { GemMaterialOpts } from '@/components/gemMaterial'
+
+// `sourceCanvas` is no longer needed — backdrop-filter reads the live
+// Mol* layer beneath this overlay automatically. Keeping the import path
+// stable in case we need the canvas ref for a future feature.
+
 export type StructureFormat = 'pdb' | 'mmcif'
-export type ViewMode = 'cartoon' | 'glass' | 'crystal' | 'vacuum'
 
 export interface StructurePayload {
   data: string
   format: StructureFormat
-  /** Identifier used for cache-busting / key tracking. */
   id: string
 }
 
-// Built-in Mol* color themes available without registering extra
-// behaviors. `uncertainty` reads B-factor (= pLDDT × 100 for our writer)
-// and is the gem default. The others are useful for sanity-checking the
-// geometry.
-export const GLASS_COLOR_THEMES = [
-  'uncertainty',
-  'chain-id',
-  'sequence-id',
-  'residue-name',
-  'hydrophobicity',
-  'element-symbol',
-] as const
-export type GlassColorTheme = (typeof GLASS_COLOR_THEMES)[number]
+export type Metal = 'gold' | 'silver' | 'copper'
+export const METALS: readonly Metal[] = ['gold', 'silver', 'copper'] as const
 
-export interface GlassParams {
-  // Geometry — putty tube only (glass mode)
-  sizeFactor: number
-  baseSize: number
-  bfactorFactor: number
-  // Surface — gaussian surface only (crystal mode)
-  resolution: number
-  smoothness: number
-  radiusOffset: number
-  // Material — both modes
-  alpha: number
-  emissive: number
-  roughness: number
+export interface JewelryPreset {
+  // Metal armature
+  color: number
   metalness: number
-  bumpiness: number
-  // Color — both modes
-  colorTheme: GlassColorTheme
-  colorReverse: boolean
-  // Postprocessing — both modes, canvas3d-only (no rebuild)
+  roughness: number
+  emissive: number
+  // Scene (cheap — canvas3d only)
+  background: number
+  exposure: number
   bloomStrength: number
   bloomRadius: number
   bloomThreshold: number
-  exposure: number
-  backgroundColor: number
-}
-
-// Metallic coral putty — confidence-veined polished gemstone tube.
-export const DEFAULT_GLASS_PARAMS: GlassParams = {
-  sizeFactor: 0.7,
-  baseSize: 0,
-  bfactorFactor: 0.02,
-  resolution: 1,
-  smoothness: 1.5,
-  radiusOffset: 0,
-  alpha: 1,
-  emissive: 0.25,
-  roughness: 0.1,
-  metalness: 1,
-  bumpiness: 0,
-  colorTheme: 'uncertainty',
-  colorReverse: true,
-  bloomStrength: 1.4,
-  bloomRadius: 0.8,
-  bloomThreshold: 0.25,
-  exposure: 1.3,
-  backgroundColor: 0x0a0a0a,
-}
-
-// Vacuum tube — glowing inner wire wrapped in a thin glass shell.
-// The wire's emissive is global; pLDDT drives BRIGHTNESS via the
-// uncertainty color theme + bloom mode 'emissive', so high-confidence
-// residues read as white-hot filament and low-confidence ones stay dim.
-export interface VacuumParams {
-  // Inner wire — putty
-  wireAlpha: number
-  wireEmissive: number
-  wireRoughness: number
-  wireMetalness: number
+  // Studio rig — five directional lights + ambient. Positions and
+  // colors are baked into STUDIO_LIGHT_LAYOUT below; only intensities
+  // are per-metal so you can soften silver, push gold, etc.
+  ambientIntensity: number
+  keyIntensity: number
+  fillIntensity: number
+  rimIntensity: number
+  topIntensity: number
+  bounceIntensity: number
+  // Wire (putty)
   wireSizeFactor: number
   wireBaseSize: number
   wireBfactorFactor: number
-  // Outer shell — gaussian surface
-  shellAlpha: number
-  shellEmissive: number
-  shellRoughness: number
-  shellMetalness: number
-  shellResolution: number
-  shellSmoothness: number
-  shellRadiusOffset: number
-  // Color — both layers share the theme; the wire does the work
-  colorTheme: GlassColorTheme
-  colorReverse: boolean
-  // Postprocessing
-  bloomStrength: number
-  bloomRadius: number
-  bloomThreshold: number
-  exposure: number
-  backgroundColor: number
+  // Side chains (ball-and-stick on polymer)
+  sideChainSizeFactor: number
+  sideChainAspectRatio: number
+  sideChainBondScale: number
+  // Ligand (ball-and-stick)
+  ligandSizeFactor: number
+  ligandAspectRatio: number
+  ligandBondScale: number
+  // Liquid-glass overlay — HTML element with CSS backdrop-filter clipped
+  // to the convex-hull silhouette of projected atoms.
+  shellBlur: number              // CSS px backdrop blur
+  shellBrightness: number        // 1.0 = neutral
+  shellSaturation: number        // 1.0 = neutral
+  shellEnvelopePad: number       // px to inflate the hull outward
+  shellSmoothIterations: number  // Chaikin smoothing passes (0 = sharp)
+  /** 0 = use metal color as tint. */
+  shellTintColor: number
+  shellTintAmount: number        // 0-1
+  shellEdgeHighlight: number     // 0-1 inner-rim alpha
+  shellEdgeWidth: number         // px box-shadow inner-rim radius
 }
 
-export const DEFAULT_VACUUM_PARAMS: VacuumParams = {
-  wireAlpha: 1,
-  wireEmissive: 0.6,
-  wireRoughness: 0.4,
-  wireMetalness: 0,
-  wireSizeFactor: 0.5,
-  wireBaseSize: 0.1,
-  wireBfactorFactor: 0.025,
-  shellAlpha: 0.15,
-  shellEmissive: 0,
-  shellRoughness: 0.1,
-  shellMetalness: 0,
-  shellResolution: 0.6,
-  shellSmoothness: 1,
-  shellRadiusOffset: 1.5,
-  colorTheme: 'uncertainty',
-  colorReverse: true,
-  bloomStrength: 1.8,
-  bloomRadius: 1,
-  bloomThreshold: 0.15,
-  exposure: 1.5,
-  backgroundColor: 0x050505,
-}
+export type JewelryPresets = Record<Metal, JewelryPreset>
 
-// Translucent gaussian surface — protein-in-ice / fossil-in-amber.
-// Lower alpha + slight radius puff + smoothest setting; metalness pulled
-// back from the putty default so it reads as a translucent material
-// rather than a metallic shell.
-export const DEFAULT_CRYSTAL_PARAMS: GlassParams = {
-  sizeFactor: 0.7,
-  baseSize: 0,
-  bfactorFactor: 0.02,
-  resolution: 0.6,
-  smoothness: 1,
-  radiusOffset: 0.5,
-  alpha: 0.3,
-  emissive: 0.1,
-  roughness: 0.15,
-  metalness: 0.6,
-  bumpiness: 0,
-  colorTheme: 'uncertainty',
-  colorReverse: true,
-  bloomStrength: 1.2,
-  bloomRadius: 0.6,
-  bloomThreshold: 0.4,
-  exposure: 1.4,
-  backgroundColor: 0x0a0a0a,
+export const BUNDLED_PRESETS: JewelryPresets = defaultPresets as JewelryPresets
+
+/**
+ * Studio rig — 5 directional lights arranged for jewelry-case drama. The
+ * metal armature is full PBR but Mol* has no environment map (verified:
+ * no IBL in mol-gl/shader), so reflections only catch the lights we put
+ * in the scene. A single key light gives one hot spot and dead matte
+ * everywhere else; a multi-light rig fakes a polished-display case by
+ * giving every facet a highlight to catch.
+ *
+ * Inclination is the angle from zenith (0° = directly above, 90° =
+ * horizon, 180° = directly below). Azimuth rotates around the vertical
+ * axis (0° = front).
+ *
+ *   key        — warm hot spot, upper-front-right; main facet highlight.
+ *   fill       — cool soft light, upper-back-left; opens up shadows.
+ *   rim        — neutral back-top; halo edge-light that separates the
+ *                piece from the background.
+ *   top        — neutral overhead; sparkle on horizontal facets.
+ *   bounce     — warm under-glow; subtle metal warmth from below.
+ *
+ * Ambient is pulled to near zero so the rig does the work — jewelry
+ * cases live or die by contrast.
+ */
+type LightSlot = 'key' | 'fill' | 'rim' | 'top' | 'bounce'
+const STUDIO_LIGHT_LAYOUT: Record<
+  LightSlot,
+  { inclination: number; azimuth: number; color: number }
+> = {
+  key:    { inclination: 38,  azimuth: 35,  color: 0xfff0d0 },
+  fill:   { inclination: 62,  azimuth: 235, color: 0xcad8ff },
+  rim:    { inclination: 22,  azimuth: 175, color: 0xffffff },
+  top:    { inclination: 5,   azimuth: 0,   color: 0xfff5e6 },
+  bounce: { inclination: 148, azimuth: 0,   color: 0xffc18a },
 }
+const AMBIENT_COLOR = 0xffffff
 
 interface Props {
   structure: StructurePayload | null
-  /** Optional pLDDT values per residue; when provided, colours by confidence. */
-  plddt?: Float32Array | number[] | null
-  viewMode?: ViewMode
-  glassParams?: GlassParams
-  vacuumParams?: VacuumParams
+  metal?: Metal
+  /** Override the bundled presets (e.g. from a settings panel). */
+  presets?: JewelryPresets
+  /**
+   * Hide the (expensive) gem shell so per-frame rebuilds only redraw the
+   * cheap metal reps. Wire/sidechain/ligand tessellate in ~10-30 ms each
+   * for typical sizes, so the armature condenses at near-real-time.
+   * Shell crystallizes around the final structure once this flips false.
+   */
+  streaming?: boolean
+  /**
+   * Which gem-shell renderer to use on top of the Mol* canvas:
+   *   - 'glass' : CSS backdrop-filter overlay (LiquidGlass). Fast, no extra
+   *               WebGL context, but no real refraction.
+   *   - 'gem'   : Three.js MeshPhysicalMaterial shell (RefractiveShell).
+   *               Real transmission/IOR/dispersion, dedicated WebGL canvas
+   *               mirroring Mol*'s camera. Slightly heavier; matches the
+   *               wordmark logo's material register exactly.
+   *   - 'none'  : no shell overlay; only the Mol* metal armature renders.
+   * Defaults to 'gem' since we built the new register specifically for this.
+   */
+  shellMode?: 'glass' | 'gem' | 'none'
+  /** Gem preset for the 'gem' shellMode. Ignored otherwise. */
+  gemPreset?: GemPreset
   className?: string
 }
 
-// Apply the canvas3d-only slice of vacuum params.
-function applyVacuumCanvas3d(plugin: PluginContext, p: VacuumParams) {
+function applyCanvas3d(plugin: PluginContext, p: JewelryPreset) {
   const c3d = plugin.canvas3d
   if (!c3d) return
   c3d.setProps({
     renderer: {
-      backgroundColor: Color(p.backgroundColor),
+      backgroundColor: Color(p.background),
       exposure: p.exposure,
+      ambientColor: Color(AMBIENT_COLOR),
+      ambientIntensity: p.ambientIntensity,
+      light: (['key', 'fill', 'rim', 'top', 'bounce'] as const).map((slot) => {
+        const layout = STUDIO_LIGHT_LAYOUT[slot]
+        const intensityKey =
+          (slot + 'Intensity') as `${LightSlot}Intensity`
+        return {
+          inclination: layout.inclination,
+          azimuth: layout.azimuth,
+          color: Color(layout.color),
+          intensity: p[intensityKey],
+        }
+      }),
     },
     postprocessing: {
       outline: { name: 'off', params: {} },
@@ -222,63 +209,73 @@ function applyVacuumCanvas3d(plugin: PluginContext, p: VacuumParams) {
   })
 }
 
-// Apply the canvas3d-only slice of glass params (bloom, exposure,
-// background). Cheap — does not rebuild geometry. Called both from the
-// load effect and from a separate postprocessing effect.
-function applyGlassCanvas3d(plugin: PluginContext, p: GlassParams) {
-  const c3d = plugin.canvas3d
-  if (!c3d) return
-  c3d.setProps({
-    renderer: {
-      backgroundColor: Color(p.backgroundColor),
-      exposure: p.exposure,
-    },
-    postprocessing: {
-      outline: { name: 'off', params: {} },
-      bloom: {
-        name: 'on',
-        params: {
-          strength: p.bloomStrength,
-          radius: p.bloomRadius,
-          threshold: p.bloomThreshold,
-          mode: 'emissive',
-        },
-      },
-    },
-  })
-}
-
-function applyCartoonCanvas3d(
-  plugin: PluginContext,
-  defaults: { renderer: any; postprocessing: any } | null,
-) {
-  const c3d = plugin.canvas3d
-  if (!c3d || !defaults) return
-  c3d.setProps({
-    renderer: {
-      backgroundColor: defaults.renderer.backgroundColor,
-      exposure: defaults.renderer.exposure,
-    },
-    postprocessing: {
-      outline: defaults.postprocessing.outline,
-      bloom: defaults.postprocessing.bloom,
-    },
-  })
+/**
+ * Adapter: subscribes to the gem-shell tuning store and threads the resolved
+ * params into RefractiveShell. Kept as a separate component so MolViewer's
+ * own re-renders aren't triggered by every slider drag — only this thin
+ * wrapper re-renders, and the shell's prop diff handles the rebuild.
+ */
+function RefractiveShellFromStore({
+  atomPositions,
+  cameraSnapshot,
+  backdropCanvas,
+  width,
+  height,
+  fallbackPreset,
+}: {
+  atomPositions: Float32Array | null
+  cameraSnapshot: () => CameraSnapshot | null
+  backdropCanvas: HTMLCanvasElement | null
+  width: number
+  height: number
+  fallbackPreset: GemPreset
+}) {
+  const shape = useGemShellStore((s) => s.shape)
+  const presetFromStore = useGemShellStore((s) => s.preset)
+  const attenuationFactor = useGemShellStore((s) => s.attenuationFactor)
+  const padding = useGemShellStore((s) => s.padding)
+  const ior = useGemShellStore((s) => s.iorOverride)
+  const transmission = useGemShellStore((s) => s.transmissionOverride)
+  const roughness = useGemShellStore((s) => s.roughnessOverride)
+  const dispersion = useGemShellStore((s) => s.dispersionOverride)
+  const overrides: Partial<GemMaterialOpts> = {}
+  if (ior !== null) overrides.ior = ior
+  if (transmission !== null) overrides.transmission = transmission
+  if (roughness !== null) overrides.roughness = roughness
+  if (dispersion !== null) overrides.dispersion = dispersion
+  return (
+    <RefractiveShell
+      atomPositions={atomPositions}
+      cameraSnapshot={cameraSnapshot}
+      backdropCanvas={backdropCanvas}
+      width={width}
+      height={height}
+      shape={shape}
+      preset={presetFromStore ?? fallbackPreset}
+      attenuationFactor={attenuationFactor}
+      padding={padding}
+      materialOverrides={Object.keys(overrides).length ? overrides : undefined}
+    />
+  )
 }
 
 export function MolViewer({
   structure,
-  viewMode = 'cartoon',
-  glassParams = DEFAULT_GLASS_PARAMS,
-  vacuumParams = DEFAULT_VACUUM_PARAMS,
+  metal = 'gold',
+  presets = BUNDLED_PRESETS,
+  streaming = false,
+  shellMode = 'gem',
+  gemPreset = 'ruby',
   className,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const pluginRef = useRef<PluginContext | null>(null)
-  const defaultsRef = useRef<{ renderer: any; postprocessing: any } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  // Pixel size of the overlay canvas — measured from the container via
+  // ResizeObserver so the Three.js canvas always matches Mol*'s viewport.
+  const [overlaySize, setOverlaySize] = useState({ width: 0, height: 0 })
 
   useEffect(() => {
     let cancelled = false
@@ -296,13 +293,6 @@ export function MolViewer({
         const ok = await plugin.initViewerAsync(canvas, container)
         if (!ok) throw new Error('Mol* initViewerAsync returned false')
         pluginRef.current = plugin
-        if (plugin.canvas3d) {
-          const p = plugin.canvas3d.props
-          defaultsRef.current = {
-            renderer: { ...p.renderer },
-            postprocessing: { ...p.postprocessing },
-          }
-        }
         setReady(true)
       } catch (e) {
         setError((e as Error).message)
@@ -318,13 +308,11 @@ export function MolViewer({
     }
   }, [])
 
-  // Effect 1 — structure + representation. Rebuilds when anything that
-  // affects geometry/material/color theme changes, plus on structure or
-  // viewMode change.
-  //
-  // The deps list pulls the rep-affecting slice of glassParams; the
-  // postprocessing slice is intentionally excluded so its sliders don't
-  // cause a rebuild.
+  const preset = presets[metal]
+
+  // Effect 1 — structure + representations. Rebuilds on structure change,
+  // metal change, or any representation-affecting param change. Bloom /
+  // exposure / background ride on Effect 2 to keep drag smooth.
   useEffect(() => {
     const plugin = pluginRef.current
     if (!plugin || !ready || !structure) return
@@ -332,13 +320,7 @@ export function MolViewer({
     async function load() {
       try {
         await plugin!.clear()
-        if (viewMode === 'glass' || viewMode === 'crystal') {
-          applyGlassCanvas3d(plugin!, glassParams)
-        } else if (viewMode === 'vacuum') {
-          applyVacuumCanvas3d(plugin!, vacuumParams)
-        } else {
-          applyCartoonCanvas3d(plugin!, defaultsRef.current)
-        }
+        applyCanvas3d(plugin!, preset)
 
         const data = await plugin!.builders.data.rawData({
           data: structure!.data,
@@ -350,137 +332,104 @@ export function MolViewer({
         )
         if (cancelled) return
 
-        if (viewMode === 'cartoon') {
-          await plugin!.builders.structure.hierarchy.applyPreset(
-            trajectory,
-            'default',
-          )
-        } else {
-          // Manual build: model → structure → polymer component → (putty
-          // for glass, gaussian-surface for crystal, both for vacuum).
-          // We skip the `default` preset because it emits cartoon.
-          const model = await plugin!.builders.structure.createModel(trajectory)
-          if (cancelled) return
-          const struct = await plugin!.builders.structure.createStructure(model)
-          if (cancelled) return
-          const polymer = await plugin!.builders.structure.tryCreateComponentStatic(
-            struct,
-            'polymer',
-          )
-          if (cancelled || !polymer) return
+        const model = await plugin!.builders.structure.createModel(trajectory)
+        if (cancelled) return
+        const struct = await plugin!.builders.structure.createStructure(model)
+        if (cancelled) return
+        const polymer = await plugin!.builders.structure.tryCreateComponentStatic(
+          struct,
+          'polymer',
+        )
+        if (cancelled || !polymer) return
 
-          if (viewMode === 'glass') {
-            await plugin!.builders.structure.representation.addRepresentation(
-              polymer,
-              {
-                type: 'putty',
-                typeParams: {
-                  alpha: glassParams.alpha,
-                  emissive: glassParams.emissive,
-                  quality: 'high',
-                  material: {
-                    metalness: glassParams.metalness,
-                    roughness: glassParams.roughness,
-                    bumpiness: glassParams.bumpiness,
-                  },
-                  sizeFactor: glassParams.sizeFactor,
-                },
-                color: glassParams.colorTheme,
-                colorParams: { reverse: glassParams.colorReverse } as any,
-                size: 'uncertainty',
-                sizeParams: {
-                  bfactorFactor: glassParams.bfactorFactor,
-                  baseSize: glassParams.baseSize,
-                } as any,
+        // Metal armature — putty wire. Thickness tracks pLDDT (B-factor).
+        await plugin!.builders.structure.representation.addRepresentation(
+          polymer,
+          {
+            type: 'putty',
+            typeParams: {
+              alpha: 1.0,
+              emissive: preset.emissive,
+              quality: 'high',
+              material: {
+                metalness: preset.metalness,
+                roughness: preset.roughness,
+                bumpiness: 0,
               },
-              { tag: 'glass-ribbon' },
-            )
-          } else if (viewMode === 'crystal') {
-            // crystal: gaussian-surface with the same gem treatment.
-            await plugin!.builders.structure.representation.addRepresentation(
-              polymer,
-              {
-                type: 'gaussian-surface',
-                typeParams: {
-                  alpha: glassParams.alpha,
-                  emissive: glassParams.emissive,
-                  quality: 'high',
-                  material: {
-                    metalness: glassParams.metalness,
-                    roughness: glassParams.roughness,
-                    bumpiness: glassParams.bumpiness,
-                  },
-                  resolution: glassParams.resolution,
-                  smoothness: glassParams.smoothness,
-                  radiusOffset: glassParams.radiusOffset,
-                },
-                color: glassParams.colorTheme,
-                colorParams: { reverse: glassParams.colorReverse } as any,
+              sizeFactor: preset.wireSizeFactor,
+            },
+            color: 'uniform',
+            colorParams: { value: Color(preset.color) } as any,
+            size: 'uncertainty',
+            sizeParams: {
+              bfactorFactor: preset.wireBfactorFactor,
+              baseSize: preset.wireBaseSize,
+            } as any,
+          },
+          { tag: 'jewel-wire' },
+        )
+        if (cancelled) return
+
+        // Side chains as fine articulated metalwork (covers backbone too;
+        // the putty wire dominates that visually).
+        await plugin!.builders.structure.representation.addRepresentation(
+          polymer,
+          {
+            type: 'ball-and-stick',
+            typeParams: {
+              alpha: 1.0,
+              emissive: preset.emissive,
+              quality: 'high',
+              material: {
+                metalness: preset.metalness,
+                roughness: preset.roughness,
+                bumpiness: 0,
               },
-              { tag: 'crystal-surface' },
-            )
-          } else {
-            // vacuum: glowing putty wire INSIDE translucent gaussian-
-            // surface shell. Order matters for transparency sorting in
-            // some backends, but Mol*'s WBOIT handles the layering.
-            //
-            // The wire's emissive + high bloom + emissive-mode bloom
-            // means brightness scales with the color theme; with
-            // `uncertainty` reverse=true, high-pLDDT residues read as
-            // white-hot filament.
-            await plugin!.builders.structure.representation.addRepresentation(
-              polymer,
-              {
-                type: 'putty',
-                typeParams: {
-                  alpha: vacuumParams.wireAlpha,
-                  emissive: vacuumParams.wireEmissive,
-                  quality: 'high',
-                  material: {
-                    metalness: vacuumParams.wireMetalness,
-                    roughness: vacuumParams.wireRoughness,
-                    bumpiness: 0,
-                  },
-                  sizeFactor: vacuumParams.wireSizeFactor,
+              sizeFactor: preset.sideChainSizeFactor,
+              sizeAspectRatio: preset.sideChainAspectRatio,
+              bondScale: preset.sideChainBondScale,
+            },
+            color: 'uniform',
+            colorParams: { value: Color(preset.color) } as any,
+          },
+          { tag: 'jewel-side-chains' },
+        )
+        if (cancelled) return
+
+        // Ligands — slightly heavier so cofactors read as centerpiece.
+        const ligand = await plugin!.builders.structure.tryCreateComponentStatic(
+          struct,
+          'ligand',
+        )
+        if (cancelled) return
+        if (ligand) {
+          await plugin!.builders.structure.representation.addRepresentation(
+            ligand,
+            {
+              type: 'ball-and-stick',
+              typeParams: {
+                alpha: 1.0,
+                emissive: preset.emissive,
+                quality: 'high',
+                material: {
+                  metalness: preset.metalness,
+                  roughness: preset.roughness,
+                  bumpiness: 0,
                 },
-                color: vacuumParams.colorTheme,
-                colorParams: { reverse: vacuumParams.colorReverse } as any,
-                size: 'uncertainty',
-                sizeParams: {
-                  bfactorFactor: vacuumParams.wireBfactorFactor,
-                  baseSize: vacuumParams.wireBaseSize,
-                } as any,
+                sizeFactor: preset.ligandSizeFactor,
+                sizeAspectRatio: preset.ligandAspectRatio,
+                bondScale: preset.ligandBondScale,
               },
-              { tag: 'vacuum-wire' },
-            )
-            if (cancelled) return
-            await plugin!.builders.structure.representation.addRepresentation(
-              polymer,
-              {
-                type: 'gaussian-surface',
-                typeParams: {
-                  alpha: vacuumParams.shellAlpha,
-                  emissive: vacuumParams.shellEmissive,
-                  quality: 'high',
-                  material: {
-                    metalness: vacuumParams.shellMetalness,
-                    roughness: vacuumParams.shellRoughness,
-                    bumpiness: 0,
-                  },
-                  resolution: vacuumParams.shellResolution,
-                  smoothness: vacuumParams.shellSmoothness,
-                  radiusOffset: vacuumParams.shellRadiusOffset,
-                },
-                // Shell uses a neutral color; the wire owns the pLDDT
-                // narrative. chain-id with a single chain produces an
-                // even tint so the shell reads as glass, not as a
-                // second confidence indicator.
-                color: 'chain-id',
-              },
-              { tag: 'vacuum-shell' },
-            )
-          }
+              color: 'uniform',
+              colorParams: { value: Color(preset.color) } as any,
+            },
+            { tag: 'jewel-ligand' },
+          )
+          if (cancelled) return
         }
+
+        // Gem shell is handled by the RefractiveShell overlay below — Mol*
+        // has no IOR / transmission so it can't render real refraction.
       } catch (e) {
         console.error('[MolViewer] structure load failed:', e)
         if (e instanceof Error) console.error('[MolViewer] stack:', e.stack)
@@ -494,64 +443,112 @@ export function MolViewer({
   }, [
     structure,
     ready,
-    viewMode,
-    // Rep-affecting params: geometry (glass), surface (crystal), material, color.
-    glassParams.sizeFactor,
-    glassParams.baseSize,
-    glassParams.bfactorFactor,
-    glassParams.resolution,
-    glassParams.smoothness,
-    glassParams.radiusOffset,
-    glassParams.alpha,
-    glassParams.emissive,
-    glassParams.roughness,
-    glassParams.metalness,
-    glassParams.bumpiness,
-    glassParams.colorTheme,
-    glassParams.colorReverse,
-    // Rep-affecting vacuum params (wire + shell).
-    vacuumParams.wireAlpha,
-    vacuumParams.wireEmissive,
-    vacuumParams.wireRoughness,
-    vacuumParams.wireMetalness,
-    vacuumParams.wireSizeFactor,
-    vacuumParams.wireBaseSize,
-    vacuumParams.wireBfactorFactor,
-    vacuumParams.shellAlpha,
-    vacuumParams.shellEmissive,
-    vacuumParams.shellRoughness,
-    vacuumParams.shellMetalness,
-    vacuumParams.shellResolution,
-    vacuumParams.shellSmoothness,
-    vacuumParams.shellRadiusOffset,
-    vacuumParams.colorTheme,
-    vacuumParams.colorReverse,
+    metal,
+    streaming,
+    preset.color,
+    preset.metalness,
+    preset.roughness,
+    preset.emissive,
+    preset.wireSizeFactor,
+    preset.wireBaseSize,
+    preset.wireBfactorFactor,
+    preset.sideChainSizeFactor,
+    preset.sideChainAspectRatio,
+    preset.sideChainBondScale,
+    preset.ligandSizeFactor,
+    preset.ligandAspectRatio,
+    preset.ligandBondScale,
   ])
 
-  // Effect 2 — canvas3d-only updates. Cheap, no rebuild. Smooth slider
-  // drag for bloom/exposure/background.
+  // Effect 2 — cheap canvas3d updates. Smooth slider drag.
   useEffect(() => {
     const plugin = pluginRef.current
     if (!plugin || !ready) return
-    if (viewMode === 'glass' || viewMode === 'crystal') {
-      applyGlassCanvas3d(plugin, glassParams)
-    } else if (viewMode === 'vacuum') {
-      applyVacuumCanvas3d(plugin, vacuumParams)
-    }
+    applyCanvas3d(plugin, preset)
   }, [
     ready,
-    viewMode,
-    glassParams.bloomStrength,
-    glassParams.bloomRadius,
-    glassParams.bloomThreshold,
-    glassParams.exposure,
-    glassParams.backgroundColor,
-    vacuumParams.bloomStrength,
-    vacuumParams.bloomRadius,
-    vacuumParams.bloomThreshold,
-    vacuumParams.exposure,
-    vacuumParams.backgroundColor,
+    preset.background,
+    preset.exposure,
+    preset.bloomStrength,
+    preset.bloomRadius,
+    preset.bloomThreshold,
+    preset.ambientIntensity,
+    preset.keyIntensity,
+    preset.fillIntensity,
+    preset.rimIntensity,
+    preset.topIntensity,
+    preset.bounceIntensity,
   ])
+
+  // Track container size so the Three.js overlay canvas matches the Mol*
+  // canvas pixel-for-pixel. ResizeObserver fires on parent layout changes
+  // (window resize, panel collapse, drawer open) without polling.
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const measure = () => {
+      const r = container.getBoundingClientRect()
+      setOverlaySize({ width: Math.max(1, r.width), height: Math.max(1, r.height) })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [])
+
+  // Atom positions for the refractive shell — parsed once per structure
+  // change. ~50-200μs for typical sizes; memoization avoids re-parsing
+  // when only material/lighting sliders move.
+  const atomPositions = useMemo(() => {
+    if (!structure) return null
+    return extractAtomPositions(structure.data, structure.format)
+  }, [structure])
+
+  // Camera snapshot getter — stable reference, called by the overlay's
+  // animation loop each frame. Reads Mol*'s live camera state.
+  const cameraSnapshot = useCallback((): CameraSnapshot | null => {
+    const cam = pluginRef.current?.canvas3d?.camera
+    if (!cam) return null
+    const s = cam.state
+    return {
+      fov: s.fov,
+      position: [s.position[0], s.position[1], s.position[2]],
+      up: [s.up[0], s.up[1], s.up[2]],
+      target: [s.target[0], s.target[1], s.target[2]],
+    }
+  }, [])
+
+  const glassParams: LiquidGlassParams = useMemo(
+    () => ({
+      blur: preset.shellBlur,
+      brightness: preset.shellBrightness,
+      saturation: preset.shellSaturation,
+      envelopePad: preset.shellEnvelopePad,
+      smoothIterations: preset.shellSmoothIterations,
+      // 0 is the sentinel for "tint by metal color" so the silhouette
+      // always reads as the current metal unless overridden explicitly.
+      tintColor: preset.shellTintColor || preset.color,
+      tintAmount: preset.shellTintAmount,
+      edgeHighlight: preset.shellEdgeHighlight,
+      edgeWidth: preset.shellEdgeWidth,
+    }),
+    [
+      preset.shellBlur,
+      preset.shellBrightness,
+      preset.shellSaturation,
+      preset.shellEnvelopePad,
+      preset.shellSmoothIterations,
+      preset.shellTintColor,
+      preset.shellTintAmount,
+      preset.shellEdgeHighlight,
+      preset.shellEdgeWidth,
+      preset.color,
+    ],
+  )
+
+  // Hide the glass during streaming so the metal armature condensation
+  // shows clean. Reappears when `streaming` flips false on the last frame.
+  const shellAtoms = streaming ? null : atomPositions
 
   return (
     <div
@@ -560,8 +557,8 @@ export function MolViewer({
       style={{
         position: 'relative',
         width: '100%',
-        minHeight: 380,
-        height: 380,
+        aspectRatio: '4 / 3',
+        minHeight: 320,
         border: '1px solid var(--rule)',
         background: 'var(--paper-mottle)',
         overflow: 'hidden',
@@ -577,6 +574,25 @@ export function MolViewer({
           display: 'block',
         }}
       />
+      {overlaySize.width > 0 && overlaySize.height > 0 && shellMode === 'glass' && (
+        <LiquidGlass
+          atomPositions={shellAtoms}
+          cameraSnapshot={cameraSnapshot}
+          params={glassParams}
+          width={overlaySize.width}
+          height={overlaySize.height}
+        />
+      )}
+      {overlaySize.width > 0 && overlaySize.height > 0 && shellMode === 'gem' && (
+        <RefractiveShellFromStore
+          atomPositions={shellAtoms}
+          cameraSnapshot={cameraSnapshot}
+          backdropCanvas={canvasRef.current}
+          width={overlaySize.width}
+          height={overlaySize.height}
+          fallbackPreset={gemPreset}
+        />
+      )}
       {error && (
         <div
           style={{

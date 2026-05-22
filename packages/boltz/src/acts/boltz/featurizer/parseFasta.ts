@@ -22,7 +22,7 @@
 import type { ChainInput } from './index'
 import type { ChainType } from './tables'
 
-const KNOWN_TYPES = new Set<ChainType>(['protein', 'rna', 'dna'])
+const KNOWN_TYPES = new Set<ChainType>(['protein', 'rna', 'dna', 'ligand'])
 
 /**
  * Lightweight alphabet heuristic for header-less or untyped chains.

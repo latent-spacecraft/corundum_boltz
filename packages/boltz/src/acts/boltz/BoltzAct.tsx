@@ -16,20 +16,18 @@
  * Slice 3 = orchestration loops).
  */
 import { create } from 'zustand'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   MolViewer,
-  DEFAULT_GLASS_PARAMS,
-  DEFAULT_CRYSTAL_PARAMS,
-  DEFAULT_VACUUM_PARAMS,
-  GLASS_COLOR_THEMES,
+  METALS,
+  BUNDLED_PRESETS,
   type StructurePayload,
-  type ViewMode,
-  type GlassParams,
-  type VacuumParams,
-  type GlassColorTheme,
+  type Metal,
+  type JewelryPreset,
+  type JewelryPresets,
 } from './MolViewer'
+import { MoleroViewer } from '@/molero/MoleroViewer'
 import { useModelSession } from '@/hooks/useModelSession'
 import { formatBytes } from '@/engine/fetcher'
 import {
@@ -44,13 +42,24 @@ import { predict, type ProgressEvent } from './orchestrate'
 import { writeMmcif } from './mmcif'
 import { validateAgainstGolden, type ValidationReport } from './featurizer/validate'
 import { featurizeChains, parseFasta, type ParsedChain } from './featurizer'
+import { loadLigandBlob, type LigandBlob } from './featurizer/ligand'
+import { useLigandInsertSlot } from './LigandDrawer'
 
 interface BoltzActState {
   structure: StructurePayload | null
   source: string
   error: string | null
   fasta: string
+  /**
+   * True while a diffusion sampling run is streaming intermediate frames
+   * into `structure`. The canvas uses this to drop the expensive gem
+   * shell during streaming (only the cheap metal armature reps redraw),
+   * then restores the full jewelry treatment on the final frame.
+   */
+  streaming: boolean
   setStructure: (payload: StructurePayload | null, source: string) => void
+  setStreamingFrame: (payload: StructurePayload) => void
+  setStreaming: (s: boolean) => void
   setError: (e: string | null) => void
   setFasta: (text: string) => void
 }
@@ -60,8 +69,13 @@ const useBoltz = create<BoltzActState>((set) => ({
   source: '',
   error: null,
   fasta: '',
+  streaming: false,
   setStructure: (payload, source) =>
-    set({ structure: payload, source, error: null }),
+    set({ structure: payload, source, error: null, streaming: false }),
+  // Streaming frames replace structure but keep the source line stable so
+  // the output pane doesn't churn the provenance label every frame.
+  setStreamingFrame: (payload) => set({ structure: payload, error: null }),
+  setStreaming: (s) => set({ streaming: s }),
   setError: (e) => set({ error: e }),
   setFasta: (text) => set({ fasta: text }),
 }))
@@ -279,7 +293,7 @@ function PredictPanel({
   diffusion: NonNullable<ReturnType<typeof useModelSession>['handle']>
   confidence: NonNullable<ReturnType<typeof useModelSession>['handle']>
 }) {
-  const { fasta, setStructure, setError } = useBoltz()
+  const { fasta, setStructure, setStreamingFrame, setStreaming, setError } = useBoltz()
   const [running, setRunning] = useState(false)
   const [progress, setProgress] = useState<ProgressEvent | null>(null)
   const [stats, setStats] = useState<{
@@ -305,14 +319,34 @@ function PredictPanel({
     ...c,
     sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase(),
   }))
-  const totalLen = cleaned.reduce((acc, c) => acc + c.sequence.length, 0)
+  // For totalLen / tooShort / tooLong: polymer residues count as 1 unit each;
+  // a ligand chain only contributes its CCD label, but the trunk runs token-
+  // per-atom so the *real* token cost of a ligand is its atom count, which we
+  // only know after fetching the blob. For preflight purposes we conservatively
+  // count one ligand token-equivalent per ligand chain; the limit check is
+  // re-asserted on the real `feats.N` once the blob is loaded.
+  const totalLen = cleaned.reduce((acc, c) => {
+    if (c.type === 'ligand') return acc + 1
+    return acc + c.sequence.length
+  }, 0)
+  const polymerLen = cleaned
+    .filter((c) => c.type !== 'ligand')
+    .reduce((acc, c) => acc + c.sequence.length, 0)
   const chainSummary = cleaned.length === 0
     ? '(empty)'
     : cleaned
-        .map((c) => `${c.name || '(no header)'} · ${c.sequence.length}`)
+        .map((c) =>
+          c.type === 'ligand'
+            ? `${c.name || c.sequence} (ligand)`
+            : `${c.name || '(no header)'} · ${c.sequence.length}`,
+        )
         .join('  +  ')
-  const tooShort = totalLen < 8
-  const tooLong = totalLen > 1024
+  // Length budget applies to polymer residues only (ligands are tiny relative
+  // to the 1024-residue trunk budget — a typical cofactor adds ~30-50 atom-
+  // tokens, well under the polymer cap).
+  const tooShort = polymerLen < 8
+  const tooLong = polymerLen > 1024
+  void totalLen
 
   const phaseLabel = (e: ProgressEvent | null) => {
     if (!e) return 'Initialising…'
@@ -344,8 +378,8 @@ function PredictPanel({
         </span>
         <span className="whitespace-nowrap">
           {cleaned.length > 1 && <span>{cleaned.length} chains · </span>}
-          {totalLen} res
-          {tooShort && totalLen > 0 && (
+          {polymerLen} res
+          {tooShort && polymerLen > 0 && (
             <span style={{ color: 'var(--destructive)' }}> · &lt;8</span>
           )}
           {tooLong && (
@@ -362,7 +396,34 @@ function PredictPanel({
           setStats(null)
           setProgress(null)
           try {
-            const feats = featurizeChains(cleaned)
+            // Resolve ligand blobs from /ccd/<CODE>.json before featurizing.
+            // Polymer chains pass through unchanged.
+            const withBlobs = await Promise.all(
+              cleaned.map(async (c) => {
+                if (c.type !== 'ligand') return c
+                const blob: LigandBlob = await loadLigandBlob(c.sequence)
+                return { ...c, blob }
+              }),
+            )
+            const feats = featurizeChains(withBlobs)
+
+            // Streaming setup: throttle per-step frames to ~1 in every 3
+            // diffusion steps so the canvas rebuild (wire + side-chains +
+            // ligand reps) overlaps with the next ONNX call. The shell
+            // stays hidden during streaming; pLDDT isn't known yet so we
+            // pass a flat 50.0 placeholder — wire thickness reads as
+            // uniform metal until the confidence head runs.
+            setStreaming(true)
+            const labelBaseStream = withBlobs[0]?.name
+              ? withBlobs[0].name.slice(0, 24)
+              : 'unnamed'
+            const labelStream = withBlobs.length > 1
+              ? `${labelBaseStream}+${withBlobs.length - 1}`
+              : labelBaseStream
+            const placeholderPlddt = new Float32Array(feats.N).fill(50)
+            const STREAM_EVERY = 3
+            let inFlight = false  // drop frames if a prior write is still painting
+
             const result = await predict({
               feats,
               trunk,
@@ -372,12 +433,34 @@ function PredictPanel({
               samplingSteps: 50,
               seed: 42,
               onProgress: (e) => setProgress(e),
+              onStep: (denoised, step, total) => {
+                if (step % STREAM_EVERY !== 0 && step !== total) return
+                if (inFlight) return
+                inFlight = true
+                try {
+                  const cifFrame = writeMmcif({
+                    feats,
+                    atomCoords: denoised,
+                    plddt: placeholderPlddt,
+                    chains: withBlobs,
+                    modelId: `step-${step}`,
+                  })
+                  setStreamingFrame({
+                    data: cifFrame,
+                    format: 'mmcif',
+                    // id ticks each frame so React/MolViewer notice the change
+                    id: `${labelStream} (diffusion ${step}/${total})`,
+                  })
+                } finally {
+                  inFlight = false
+                }
+              },
             })
             const cif = writeMmcif({
               feats,
               atomCoords: result.atomCoords,
               plddt: result.plddt,
-              chains: cleaned,
+              chains: withBlobs,
               modelId: 'predicted',
             })
             // Diagnostic: log the first 30 lines + tail of the mmCIF so we
@@ -398,11 +481,11 @@ function PredictPanel({
               )
               console.log('[BoltzAct] mmCIF head:\n' + head + '\n…\n' + tail)
             }
-            const labelBase = cleaned[0]?.name
-              ? cleaned[0].name.slice(0, 24)
+            const labelBase = withBlobs[0]?.name
+              ? withBlobs[0].name.slice(0, 24)
               : 'unnamed'
-            const label = cleaned.length > 1
-              ? `${labelBase}+${cleaned.length - 1}`
+            const label = withBlobs.length > 1
+              ? `${labelBase}+${withBlobs.length - 1}`
               : labelBase
             setStructure(
               { data: cif, format: 'mmcif', id: `${label} (predicted)` },
@@ -422,12 +505,15 @@ function PredictPanel({
               plddtMin: pMin,
               plddtMax: pMax,
               elapsedMs: result.elapsedMs,
-              residueCount: totalLen,
+              residueCount: feats.N,
             })
           } catch (err) {
             setError((err as Error).message)
           } finally {
             setRunning(false)
+            // Defensive: setStructure on the success path already clears
+            // streaming, but a mid-run error would leave it stuck on.
+            setStreaming(false)
           }
         }}
       >
@@ -477,11 +563,116 @@ const EXAMPLE_DNA = `>strand_a dna
 CGCGAATTCGCG
 >strand_b dna
 CGCGAATTCGCG`
+// Crambin (1CRN) + a heme cofactor — exercises the ligand cofolding path.
+// Crambin doesn't actually bind heme biologically; this is a featurization
+// smoke test, not a biology claim.
+const EXAMPLE_PROT_LIG = `>1CRN Crambin
+TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN
+>heme ligand
+HEM`
+
+function validateUniProtAccession(accession: string): string {
+  const acc = accession.trim().toUpperCase()
+  if (!acc) throw new Error('Enter a UniProt accession (e.g. P02768)')
+  if (!/^[A-Z][A-Z0-9]{5,9}$/.test(acc)) {
+    throw new Error(`'${acc}' doesn't look like a UniProt accession`)
+  }
+  return acc
+}
+
+/**
+ * Fetch the AlphaFold-DB precomputed structure for a UniProt accession.
+ *
+ * AlphaFoldDB hosts structures at a stable URL template; for proteins ≤ 2700
+ * residues the `-F1` fragment is the only model and `model_v4` is the
+ * current (2024+) database version. mmCIF carries per-residue pLDDT in the
+ * B-factor column — Mol* already paints that, and Molero Phase 2's emission
+ * channel will read it directly.
+ *
+ * No Boltz inference required — this is the fast "show me what AlphaFold
+ * predicted" path. Useful both as a viewer testbed and as a baseline for
+ * comparing Boltz predictions against AlphaFold's.
+ */
+async function fetchAlphaFold(accession: string): Promise<StructurePayload> {
+  const acc = validateUniProtAccession(accession)
+  const url = `https://alphafold.ebi.ac.uk/files/AF-${acc}-F1-model_v4.cif`
+  const res = await fetch(url)
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(
+        `AlphaFoldDB has no structure for ${acc} ` +
+        `(not yet predicted, or > 2700 residues — multi-fragment models aren't supported yet)`,
+      )
+    }
+    throw new Error(`AlphaFoldDB fetch failed: HTTP ${res.status}`)
+  }
+  const data = await res.text()
+  return { data, format: 'mmcif' as const, id: `AF-${acc}` }
+}
+
+/**
+ * Fetch a UniProt entry by accession and return a FASTA-ready chunk.
+ *
+ * UniProt's JSON endpoint carries the sequence + protein name + organism +
+ * a rich `features` array (active sites, modifications, variants, …) and
+ * cross-references to AlphaFold / PDB. We use sequence + name + organism
+ * to populate the FASTA box today; the full payload is stashed in window
+ * scope as a forward-looking hook so Molero's channel-mapping system can
+ * pick up per-residue features (modifications, variants, active sites)
+ * without re-fetching.
+ */
+async function fetchUniProt(accession: string): Promise<string> {
+  const acc = validateUniProtAccession(accession)
+  const res = await fetch(`https://rest.uniprot.org/uniprotkb/${acc}.json`)
+  if (!res.ok) {
+    if (res.status === 404) throw new Error(`UniProt accession '${acc}' not found`)
+    throw new Error(`UniProt fetch failed: HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  const seq: string | undefined = data?.sequence?.value
+  if (!seq) throw new Error(`UniProt response for ${acc} has no sequence`)
+  const name: string =
+    data?.proteinDescription?.recommendedName?.fullName?.value ??
+    data?.proteinDescription?.submissionNames?.[0]?.fullName?.value ??
+    'unknown'
+  const organism: string = data?.organism?.scientificName ?? ''
+  const header = `>${acc} ${name}${organism ? ' | ' + organism : ''}`
+  // Stash the full payload — Molero Phase 2 (property channels) will read
+  // features[] (ACTIVE_SITE, MOD_RES, VARIANT, DISULFID, …) here without
+  // another network call. Keyed by accession so multiple loads coexist.
+  ;(window as unknown as { __uniprotCache?: Record<string, unknown> }).__uniprotCache =
+    {
+      ...((window as unknown as { __uniprotCache?: Record<string, unknown> }).__uniprotCache ?? {}),
+      [acc]: data,
+    }
+  return `${header}\n${seq}`
+}
 
 export function BoltzInput() {
   const { fasta, setFasta, setStructure, setError } = useBoltz()
   const [loadingExample, setLoadingExample] = useState(false)
   const [precision, setPrecision] = useState<BoltzPrecision>(DEFAULT_PRECISION)
+  const [uniprotAcc, setUniprotAcc] = useState('')
+  const [uniprotLoading, setUniprotLoading] = useState(false)
+  const [uniprotError, setUniprotError] = useState<string | null>(null)
+  const setLigandInsert = useLigandInsertSlot((s) => s.setInsert)
+
+  // Wire the drawer's "click a ligand" action to this textarea. Re-registers
+  // on every render so the slot always closes over the latest fasta string —
+  // the drawer can be opened/clicked any time without staleness.
+  useEffect(() => {
+    setLigandInsert((ccd) => {
+      const code = ccd.toUpperCase()
+      // De-dup: skip if the same ligand chain is already in the input.
+      const tag = `ligand`
+      const re = new RegExp(`^>\\S+\\s+${tag}\\s*\\r?\\n${code}\\b`, 'mi')
+      if (re.test(fasta)) return
+      const chunk = `>lig_${code} ligand\n${code}`
+      const next = fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`
+      setFasta(next)
+    })
+    return () => setLigandInsert(null)
+  }, [fasta, setFasta, setLigandInsert])
 
   return (
     <div className="flex flex-col gap-4">
@@ -561,7 +752,122 @@ export function BoltzInput() {
           >
             DNA · 2×12
           </button>
+          <button
+            type="button"
+            onClick={() => setFasta(EXAMPLE_PROT_LIG)}
+            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+            title="Crambin + heme cofactor — first ligand cofolding test"
+          >
+            Prot + HEM
+          </button>
         </div>
+
+        {/* UniProt-accession loader — one shared input drives two actions:
+              · AlphaFold (primary)   — fetch precomputed mmCIF and render
+                                        immediately; no Boltz inference needed.
+              · Sequence (secondary) — populate the FASTA box for a refold.
+            Full UniProt JSON is cached on window.__uniprotCache so Molero's
+            Phase-2 channel mappings can read per-residue features later. */}
+        <label
+          className="mt-1 font-mono text-[10px] uppercase tracking-widest"
+          style={{ color: 'var(--ink-faded)' }}
+        >
+          UniProt accession
+        </label>
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={uniprotAcc}
+            onChange={(e) => setUniprotAcc(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !uniprotLoading) {
+                e.preventDefault()
+                e.currentTarget.blur()
+                // Enter defaults to the primary action: render AlphaFold structure.
+                ;(async () => {
+                  setUniprotLoading(true)
+                  setUniprotError(null)
+                  try {
+                    const payload = await fetchAlphaFold(uniprotAcc)
+                    setStructure(payload, `AlphaFoldDB · ${payload.id}`)
+                  } catch (err) {
+                    setUniprotError((err as Error).message)
+                  } finally {
+                    setUniprotLoading(false)
+                  }
+                })()
+              }
+            }}
+            placeholder="P02768"
+            spellCheck={false}
+            className="flex-1 border px-2 py-1 font-mono text-xs uppercase tracking-wide"
+            style={{
+              borderColor: 'var(--rule)',
+              background: 'var(--paper-mottle)',
+              color: 'var(--ink)',
+            }}
+          />
+          <button
+            type="button"
+            disabled={uniprotLoading || !uniprotAcc.trim()}
+            onClick={async () => {
+              setUniprotLoading(true)
+              setUniprotError(null)
+              try {
+                const payload = await fetchAlphaFold(uniprotAcc)
+                setStructure(payload, `AlphaFoldDB · ${payload.id}`)
+              } catch (err) {
+                setUniprotError((err as Error).message)
+              } finally {
+                setUniprotLoading(false)
+              }
+            }}
+            className="border px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{
+              borderColor: 'var(--oxblood)',
+              color: 'var(--ink)',
+              background: 'var(--paper-mottle)',
+              opacity: uniprotLoading || !uniprotAcc.trim() ? 0.5 : 1,
+            }}
+            title="Fetch the precomputed AlphaFold structure (mmCIF) and render it directly — no Boltz inference."
+          >
+            {uniprotLoading ? 'Fetching…' : 'AlphaFold'}
+          </button>
+          <button
+            type="button"
+            disabled={uniprotLoading || !uniprotAcc.trim()}
+            onClick={async () => {
+              setUniprotLoading(true)
+              setUniprotError(null)
+              try {
+                const chunk = await fetchUniProt(uniprotAcc)
+                setFasta(chunk)
+              } catch (err) {
+                setUniprotError((err as Error).message)
+              } finally {
+                setUniprotLoading(false)
+              }
+            }}
+            className="border px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
+            style={{
+              borderColor: 'var(--rule)',
+              color: 'var(--ink-faded)',
+              opacity: uniprotLoading || !uniprotAcc.trim() ? 0.5 : 1,
+            }}
+            title="Fetch sequence + UniProt metadata into the FASTA box, ready to refold with Boltz."
+          >
+            Sequence
+          </button>
+        </div>
+        {uniprotError && (
+          <p
+            className="font-mono text-[10px] uppercase tracking-widest"
+            style={{ color: 'var(--destructive)' }}
+          >
+            {uniprotError}
+          </p>
+        )}
 
         <label
           className="mt-1 font-mono text-[10px] uppercase tracking-widest"
@@ -754,27 +1060,343 @@ function FeaturizerSelfCheck() {
   )
 }
 
-function ViewModeToggle({
+// ─────────────────────────────────────────────────────────────────────────────
+// Canvas slot — jewelry mode only. The user picks a metal; the wire/shell
+// material is locked to the jewelry register. No slider noise.
+
+function MetalToggle({
+  value,
+  presets,
+  onChange,
+}: {
+  value: Metal
+  presets: JewelryPresets
+  onChange: (v: Metal) => void
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Metal"
+      className="flex items-center gap-0 font-mono text-[10px] uppercase tracking-widest"
+      style={{ color: 'var(--ink-faded)' }}
+    >
+      <span style={{ marginRight: 8 }}>metal</span>
+      {METALS.map((m, i) => {
+        const active = value === m
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(m)}
+            title={m}
+            style={{
+              padding: '2px 10px',
+              border: '1px solid var(--rule)',
+              borderLeftWidth: i === 0 ? 1 : 0,
+              background: active
+                ? `#${presets[m].color.toString(16).padStart(6, '0')}`
+                : 'transparent',
+              color: active ? '#1a1410' : 'var(--ink-faded)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10,
+              letterSpacing: '0.15em',
+              textTransform: 'uppercase',
+              cursor: 'pointer',
+            }}
+          >
+            {m}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Material settings panel — every numeric param in the active metal's
+// preset, grouped. The user adjusts, hits Save to persist to
+// jewelry-presets.json via a dev-only Vite middleware.
+
+type SliderGroupKey = 'metal' | 'scene' | 'lighting' | 'wire' | 'sidechain' | 'ligand' | 'shell'
+interface NumSlider {
+  key: keyof JewelryPreset
+  label: string
+  min: number
+  max: number
+  step: number
+  group: SliderGroupKey
+}
+const NUM_SLIDERS: NumSlider[] = [
+  // metal armature material
+  { key: 'metalness',           label: 'metalness',         min: 0,    max: 1,    step: 0.01,  group: 'metal' },
+  { key: 'roughness',           label: 'roughness',         min: 0,    max: 1,    step: 0.01,  group: 'metal' },
+  { key: 'emissive',            label: 'emissive',          min: 0,    max: 1,    step: 0.01,  group: 'metal' },
+  // scene
+  { key: 'exposure',            label: 'exposure',          min: 0.3,  max: 3,    step: 0.05,  group: 'scene' },
+  { key: 'bloomStrength',       label: 'bloom strength',    min: 0,    max: 3,    step: 0.05,  group: 'scene' },
+  { key: 'bloomRadius',         label: 'bloom radius',      min: 0,    max: 2,    step: 0.05,  group: 'scene' },
+  { key: 'bloomThreshold',      label: 'bloom thresh',      min: 0,    max: 1,    step: 0.01,  group: 'scene' },
+  // studio rig — intensities only; positions/colors are baked into MolViewer
+  { key: 'ambientIntensity',    label: 'ambient',           min: 0,    max: 1,    step: 0.01,  group: 'lighting' },
+  { key: 'keyIntensity',        label: 'key',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
+  { key: 'fillIntensity',       label: 'fill',              min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
+  { key: 'rimIntensity',        label: 'rim',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
+  { key: 'topIntensity',        label: 'top',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
+  { key: 'bounceIntensity',     label: 'bounce',            min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
+  // wire (putty)
+  { key: 'wireSizeFactor',      label: 'size factor',       min: 0.05, max: 3,    step: 0.05,  group: 'wire' },
+  { key: 'wireBaseSize',        label: 'base size',         min: 0,    max: 2,    step: 0.05,  group: 'wire' },
+  { key: 'wireBfactorFactor',   label: 'B-fact factor',     min: 0,    max: 0.05, step: 0.001, group: 'wire' },
+  // side chains
+  { key: 'sideChainSizeFactor', label: 'size factor',       min: 0.05, max: 1,    step: 0.01,  group: 'sidechain' },
+  { key: 'sideChainAspectRatio',label: 'aspect ratio',      min: 0.1,  max: 2,    step: 0.05,  group: 'sidechain' },
+  { key: 'sideChainBondScale',  label: 'bond scale',        min: 0.05, max: 1,    step: 0.01,  group: 'sidechain' },
+  // ligand
+  { key: 'ligandSizeFactor',    label: 'size factor',       min: 0.05, max: 1.5,  step: 0.01,  group: 'ligand' },
+  { key: 'ligandAspectRatio',   label: 'aspect ratio',      min: 0.1,  max: 2,    step: 0.05,  group: 'ligand' },
+  { key: 'ligandBondScale',     label: 'bond scale',        min: 0.05, max: 1,    step: 0.01,  group: 'ligand' },
+  // shell (liquid-glass CSS backdrop-filter overlay)
+  { key: 'shellBlur',             label: 'blur',         min: 0,   max: 30,  step: 0.5,  group: 'shell' },
+  { key: 'shellBrightness',       label: 'brightness',   min: 0.5, max: 2,   step: 0.01, group: 'shell' },
+  { key: 'shellSaturation',       label: 'saturation',   min: 0,   max: 3,   step: 0.05, group: 'shell' },
+  { key: 'shellEnvelopePad',      label: 'envelope pad', min: 0,   max: 60,  step: 1,    group: 'shell' },
+  { key: 'shellSmoothIterations', label: 'smoothing',    min: 0,   max: 4,   step: 1,    group: 'shell' },
+  { key: 'shellTintAmount',       label: 'tint amount',  min: 0,   max: 1,   step: 0.01, group: 'shell' },
+  { key: 'shellEdgeHighlight',    label: 'edge rim',     min: 0,   max: 1,   step: 0.01, group: 'shell' },
+  { key: 'shellEdgeWidth',        label: 'edge width',   min: 0,   max: 60,  step: 1,    group: 'shell' },
+]
+const GROUP_ORDER: SliderGroupKey[] = ['metal', 'scene', 'lighting', 'wire', 'sidechain', 'ligand', 'shell']
+const GROUP_LABEL: Record<SliderGroupKey, string> = {
+  metal: 'metal',
+  scene: 'scene',
+  lighting: 'lighting',
+  wire: 'wire',
+  sidechain: 'side chains',
+  ligand: 'ligand',
+  shell: 'shell',
+}
+
+function hexFromInt(n: number): string {
+  return '#' + (n & 0xffffff).toString(16).padStart(6, '0')
+}
+function intFromHex(s: string): number {
+  return parseInt(s.replace('#', ''), 16) & 0xffffff
+}
+
+function JewelrySettingsPanel({
+  metal,
+  preset,
+  onChange,
+  onSave,
+  onReset,
+  saveState,
+}: {
+  metal: Metal
+  preset: JewelryPreset
+  onChange: (next: JewelryPreset) => void
+  onSave: () => void
+  onReset: () => void
+  saveState: 'idle' | 'saving' | 'saved' | 'error'
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  const set = <K extends keyof JewelryPreset>(k: K, v: JewelryPreset[K]) =>
+    onChange({ ...preset, [k]: v })
+  return (
+    <div
+      className="font-mono"
+      style={{
+        border: '1px solid var(--rule)',
+        fontSize: 10,
+        color: 'var(--ink-faded)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setCollapsed(!collapsed)}
+        className="flex w-full cursor-pointer select-none items-center justify-between"
+        style={{
+          padding: '6px 12px',
+          background: 'transparent',
+          border: 'none',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          color: 'var(--ink-faded)',
+          letterSpacing: '0.15em',
+          textTransform: 'uppercase',
+          cursor: 'pointer',
+        }}
+      >
+        <span>{collapsed ? '▶' : '▼'}&nbsp;&nbsp;{metal} · material</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {saveState === 'saved' && (
+            <span style={{ color: 'var(--oxblood)' }}>saved</span>
+          )}
+          {saveState === 'error' && (
+            <span style={{ color: 'var(--destructive)' }}>save error</span>
+          )}
+        </span>
+      </button>
+      {!collapsed && (
+        <div style={{ padding: '4px 12px 12px' }}>
+          {/* Color + background — special non-slider rows */}
+          <div
+            className="flex items-center gap-6"
+            style={{ paddingBottom: 8, marginBottom: 8, borderBottom: '1px solid var(--rule)' }}
+          >
+            <label className="flex items-center gap-2">
+              <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                color
+              </span>
+              <input
+                type="color"
+                value={hexFromInt(preset.color)}
+                onChange={(e) => set('color', intFromHex(e.target.value))}
+                style={{
+                  width: 26,
+                  height: 18,
+                  border: '1px solid var(--rule)',
+                  background: 'transparent',
+                  padding: 0,
+                  cursor: 'pointer',
+                }}
+              />
+            </label>
+            <label className="flex items-center gap-2">
+              <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                background
+              </span>
+              <input
+                type="color"
+                value={hexFromInt(preset.background)}
+                onChange={(e) => set('background', intFromHex(e.target.value))}
+                style={{
+                  width: 26,
+                  height: 18,
+                  border: '1px solid var(--rule)',
+                  background: 'transparent',
+                  padding: 0,
+                  cursor: 'pointer',
+                }}
+              />
+            </label>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={onReset}
+              style={{
+                padding: '2px 10px',
+                border: '1px solid var(--rule)',
+                background: 'transparent',
+                color: 'var(--ink-faded)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                letterSpacing: '0.15em',
+                textTransform: 'uppercase',
+                cursor: 'pointer',
+              }}
+            >
+              reset
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={saveState === 'saving'}
+              style={{
+                padding: '2px 10px',
+                border: '1px solid var(--oxblood)',
+                background: 'var(--oxblood)',
+                color: 'var(--primary-foreground)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                letterSpacing: '0.15em',
+                textTransform: 'uppercase',
+                cursor: saveState === 'saving' ? 'wait' : 'pointer',
+                opacity: saveState === 'saving' ? 0.6 : 1,
+              }}
+            >
+              {saveState === 'saving' ? 'saving…' : 'save as default'}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-x-6 gap-y-1">
+            {GROUP_ORDER.map((g) => {
+              const sliders = NUM_SLIDERS.filter((s) => s.group === g)
+              if (sliders.length === 0) return null
+              return (
+                <div key={g} className="flex flex-col gap-1">
+                  <div
+                    style={{
+                      letterSpacing: '0.15em',
+                      textTransform: 'uppercase',
+                      color: 'var(--ink-faded)',
+                      opacity: 0.7,
+                      marginBottom: 2,
+                    }}
+                  >
+                    {GROUP_LABEL[g]}
+                  </div>
+                  {sliders.map((s) => {
+                    const v = preset[s.key] as number
+                    return (
+                      <label key={s.key} className="flex items-center gap-2">
+                        <span style={{ width: 96, color: 'var(--ink-faded)' }}>
+                          {s.label}
+                        </span>
+                        <input
+                          type="range"
+                          min={s.min}
+                          max={s.max}
+                          step={s.step}
+                          value={v}
+                          onChange={(e) => set(s.key, Number(e.target.value) as any)}
+                          style={{ flex: 1, minWidth: 0 }}
+                        />
+                        <span
+                          style={{
+                            width: 44,
+                            textAlign: 'right',
+                            color: 'var(--ink)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {s.step < 0.01 ? v.toFixed(3) : v.toFixed(2)}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+type Engine = 'molstar' | 'molero'
+
+function EngineToggle({
   value,
   onChange,
 }: {
-  value: ViewMode
-  onChange: (v: ViewMode) => void
+  value: Engine
+  onChange: (v: Engine) => void
 }) {
-  const items: Array<{ key: ViewMode; label: string }> = [
-    { key: 'cartoon', label: 'Cartoon' },
-    { key: 'glass', label: 'Glass' },
-    { key: 'crystal', label: 'Crystal' },
-    { key: 'vacuum', label: 'Vacuum' },
+  const items: { key: Engine; label: string; title: string }[] = [
+    { key: 'molstar', label: 'Mol*',  title: 'Mol* / jewelry register (default, full featured)' },
+    { key: 'molero', label: 'Molero', title: 'Molero / WebGPU (Phase 1 — spheres only)' },
   ]
   return (
     <div
       role="radiogroup"
-      aria-label="View mode"
+      aria-label="Renderer engine"
       className="flex items-center gap-0 font-mono text-[10px] uppercase tracking-widest"
       style={{ color: 'var(--ink-faded)' }}
     >
-      <span style={{ marginRight: 8 }}>view</span>
+      <span style={{ marginRight: 8 }}>engine</span>
       {items.map((it, i) => {
         const active = value === it.key
         return (
@@ -784,8 +1406,9 @@ function ViewModeToggle({
             role="radio"
             aria-checked={active}
             onClick={() => onChange(it.key)}
+            title={it.title}
             style={{
-              padding: '2px 8px',
+              padding: '2px 10px',
               border: '1px solid var(--rule)',
               borderLeftWidth: i === 0 ? 1 : 0,
               background: active ? 'var(--ink)' : 'transparent',
@@ -805,442 +1428,37 @@ function ViewModeToggle({
   )
 }
 
-type GlassSliderKey =
-  | 'sizeFactor'
-  | 'baseSize'
-  | 'bfactorFactor'
-  | 'resolution'
-  | 'smoothness'
-  | 'radiusOffset'
-  | 'alpha'
-  | 'emissive'
-  | 'roughness'
-  | 'metalness'
-  | 'bumpiness'
-  | 'bloomStrength'
-  | 'bloomRadius'
-  | 'bloomThreshold'
-  | 'exposure'
-
-type SliderGroup = 'geometry' | 'surface' | 'material' | 'postprocess'
-
-interface SliderDef {
-  key: GlassSliderKey
-  label: string
-  min: number
-  max: number
-  step: number
-  group: SliderGroup
-}
-
-const GLASS_SLIDERS: SliderDef[] = [
-  // glass-only (putty tube geometry)
-  { key: 'sizeFactor',     label: 'size factor',   min: 0.05, max: 3,    step: 0.05, group: 'geometry' },
-  { key: 'baseSize',       label: 'base size',     min: 0,    max: 2,    step: 0.05, group: 'geometry' },
-  { key: 'bfactorFactor',  label: 'B-fact factor', min: 0,    max: 0.05, step: 0.001, group: 'geometry' },
-  // crystal-only (gaussian surface)
-  { key: 'resolution',     label: 'resolution',    min: 0.2,  max: 3,    step: 0.05, group: 'surface' },
-  { key: 'smoothness',     label: 'smoothness',    min: 1,    max: 3,    step: 0.05, group: 'surface' },
-  { key: 'radiusOffset',   label: 'radius offset', min: 0,    max: 3,    step: 0.05, group: 'surface' },
-  // shared
-  { key: 'alpha',          label: 'alpha',         min: 0,    max: 1,    step: 0.01, group: 'material' },
-  { key: 'emissive',       label: 'emissive',      min: 0,    max: 1,    step: 0.01, group: 'material' },
-  { key: 'roughness',      label: 'roughness',     min: 0,    max: 1,    step: 0.01, group: 'material' },
-  { key: 'metalness',      label: 'metalness',     min: 0,    max: 1,    step: 0.01, group: 'material' },
-  { key: 'bumpiness',      label: 'bumpiness',     min: 0,    max: 1,    step: 0.01, group: 'material' },
-  { key: 'bloomStrength',  label: 'bloom strength',min: 0,    max: 3,    step: 0.05, group: 'postprocess' },
-  { key: 'bloomRadius',    label: 'bloom radius',  min: 0,    max: 2,    step: 0.05, group: 'postprocess' },
-  { key: 'bloomThreshold', label: 'bloom thresh',  min: 0,    max: 1,    step: 0.01, group: 'postprocess' },
-  { key: 'exposure',       label: 'exposure',      min: 0.3,  max: 3,    step: 0.05, group: 'postprocess' },
-]
-
-function GlassSlidersPanel({
-  mode,
-  params,
-  onChange,
-}: {
-  mode: 'glass' | 'crystal'
-  params: GlassParams
-  onChange: (next: GlassParams) => void
-}) {
-  const firstGroup: [SliderGroup, string] =
-    mode === 'crystal' ? ['surface', 'surface'] : ['geometry', 'geometry']
-  const groups: Array<[SliderGroup, string]> = [
-    firstGroup,
-    ['material', 'material'],
-    ['postprocess', 'postprocess'],
-  ]
-  const resetTarget = mode === 'crystal' ? DEFAULT_CRYSTAL_PARAMS : DEFAULT_GLASS_PARAMS
-  const headerLabel = mode === 'crystal' ? 'crystal · debug' : 'glass · debug'
-  return (
-    <div
-      className="font-mono"
-      style={{
-        border: '1px solid var(--rule)',
-        padding: '10px 12px',
-        fontSize: 10,
-        color: 'var(--ink-faded)',
-      }}
-    >
-      <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-        <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-          {headerLabel}
-        </span>
-        <button
-          type="button"
-          onClick={() => onChange(resetTarget)}
-          style={{
-            padding: '2px 8px',
-            border: '1px solid var(--rule)',
-            background: 'transparent',
-            color: 'var(--ink-faded)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            letterSpacing: '0.15em',
-            textTransform: 'uppercase',
-            cursor: 'pointer',
-          }}
-        >
-          reset
-        </button>
-      </div>
-      <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-        {groups.map(([g, gLabel]) => (
-          <div key={g} className="flex flex-col gap-1">
-            <div
-              style={{
-                letterSpacing: '0.15em',
-                textTransform: 'uppercase',
-                color: 'var(--ink-faded)',
-                opacity: 0.7,
-                marginBottom: 2,
-              }}
-            >
-              {gLabel}
-            </div>
-            {GLASS_SLIDERS.filter((s) => s.group === g).map((s) => {
-              const v = params[s.key] as number
-              return (
-                <label key={s.key} className="flex items-center gap-2">
-                  <span style={{ width: 88, color: 'var(--ink-faded)' }}>{s.label}</span>
-                  <input
-                    type="range"
-                    min={s.min}
-                    max={s.max}
-                    step={s.step}
-                    value={v}
-                    onChange={(e) =>
-                      onChange({ ...params, [s.key]: Number(e.target.value) })
-                    }
-                    style={{ flex: 1, minWidth: 0 }}
-                  />
-                  <span
-                    style={{
-                      width: 44,
-                      textAlign: 'right',
-                      color: 'var(--ink)',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {s.step < 0.01 ? v.toFixed(3) : v.toFixed(2)}
-                  </span>
-                </label>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-      <div
-        className="flex items-center gap-3"
-        style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--rule)' }}
-      >
-        <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-          color
-        </span>
-        <select
-          value={params.colorTheme}
-          onChange={(e) =>
-            onChange({ ...params, colorTheme: e.target.value as GlassColorTheme })
-          }
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--rule)',
-            color: 'var(--ink)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            padding: '2px 6px',
-            textTransform: 'lowercase',
-          }}
-        >
-          {GLASS_COLOR_THEMES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1" style={{ cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={params.colorReverse}
-            onChange={(e) =>
-              onChange({ ...params, colorReverse: e.target.checked })
-            }
-          />
-          <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-            reverse
-          </span>
-        </label>
-        <span style={{ flex: 1 }} />
-        <label className="flex items-center gap-2">
-          <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-            background
-          </span>
-          <input
-            type="color"
-            value={'#' + params.backgroundColor.toString(16).padStart(6, '0')}
-            onChange={(e) =>
-              onChange({
-                ...params,
-                backgroundColor: parseInt(e.target.value.slice(1), 16),
-              })
-            }
-            style={{
-              width: 26,
-              height: 18,
-              border: '1px solid var(--rule)',
-              background: 'transparent',
-              padding: 0,
-              cursor: 'pointer',
-            }}
-          />
-        </label>
-      </div>
-    </div>
-  )
-}
-
-type VacuumSliderKey =
-  | 'wireAlpha'
-  | 'wireEmissive'
-  | 'wireRoughness'
-  | 'wireMetalness'
-  | 'wireSizeFactor'
-  | 'wireBaseSize'
-  | 'wireBfactorFactor'
-  | 'shellAlpha'
-  | 'shellEmissive'
-  | 'shellRoughness'
-  | 'shellMetalness'
-  | 'shellResolution'
-  | 'shellSmoothness'
-  | 'shellRadiusOffset'
-  | 'bloomStrength'
-  | 'bloomRadius'
-  | 'bloomThreshold'
-  | 'exposure'
-
-type VacuumSliderGroup = 'wire' | 'shell' | 'postprocess'
-
-interface VacuumSliderDef {
-  key: VacuumSliderKey
-  label: string
-  min: number
-  max: number
-  step: number
-  group: VacuumSliderGroup
-}
-
-const VACUUM_SLIDERS: VacuumSliderDef[] = [
-  { key: 'wireEmissive',      label: 'emissive',      min: 0,    max: 2,    step: 0.01, group: 'wire' },
-  { key: 'wireAlpha',         label: 'alpha',         min: 0,    max: 1,    step: 0.01, group: 'wire' },
-  { key: 'wireRoughness',     label: 'roughness',     min: 0,    max: 1,    step: 0.01, group: 'wire' },
-  { key: 'wireMetalness',     label: 'metalness',     min: 0,    max: 1,    step: 0.01, group: 'wire' },
-  { key: 'wireSizeFactor',    label: 'size factor',   min: 0.05, max: 3,    step: 0.05, group: 'wire' },
-  { key: 'wireBaseSize',      label: 'base size',     min: 0,    max: 2,    step: 0.05, group: 'wire' },
-  { key: 'wireBfactorFactor', label: 'B-fact factor', min: 0,    max: 0.05, step: 0.001, group: 'wire' },
-  { key: 'shellAlpha',        label: 'alpha',         min: 0,    max: 1,    step: 0.01, group: 'shell' },
-  { key: 'shellEmissive',     label: 'emissive',      min: 0,    max: 1,    step: 0.01, group: 'shell' },
-  { key: 'shellRoughness',    label: 'roughness',     min: 0,    max: 1,    step: 0.01, group: 'shell' },
-  { key: 'shellMetalness',    label: 'metalness',     min: 0,    max: 1,    step: 0.01, group: 'shell' },
-  { key: 'shellResolution',   label: 'resolution',    min: 0.2,  max: 3,    step: 0.05, group: 'shell' },
-  { key: 'shellSmoothness',   label: 'smoothness',    min: 1,    max: 3,    step: 0.05, group: 'shell' },
-  { key: 'shellRadiusOffset', label: 'radius offset', min: 0,    max: 5,    step: 0.05, group: 'shell' },
-  { key: 'bloomStrength',     label: 'bloom strength',min: 0,    max: 3,    step: 0.05, group: 'postprocess' },
-  { key: 'bloomRadius',       label: 'bloom radius',  min: 0,    max: 2,    step: 0.05, group: 'postprocess' },
-  { key: 'bloomThreshold',    label: 'bloom thresh',  min: 0,    max: 1,    step: 0.01, group: 'postprocess' },
-  { key: 'exposure',          label: 'exposure',      min: 0.3,  max: 3,    step: 0.05, group: 'postprocess' },
-]
-
-function VacuumSlidersPanel({
-  params,
-  onChange,
-}: {
-  params: VacuumParams
-  onChange: (next: VacuumParams) => void
-}) {
-  const groups: Array<[VacuumSliderGroup, string]> = [
-    ['wire', 'wire'],
-    ['shell', 'shell'],
-    ['postprocess', 'postprocess'],
-  ]
-  return (
-    <div
-      className="font-mono"
-      style={{
-        border: '1px solid var(--rule)',
-        padding: '10px 12px',
-        fontSize: 10,
-        color: 'var(--ink-faded)',
-      }}
-    >
-      <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-        <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-          vacuum · debug
-        </span>
-        <button
-          type="button"
-          onClick={() => onChange(DEFAULT_VACUUM_PARAMS)}
-          style={{
-            padding: '2px 8px',
-            border: '1px solid var(--rule)',
-            background: 'transparent',
-            color: 'var(--ink-faded)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            letterSpacing: '0.15em',
-            textTransform: 'uppercase',
-            cursor: 'pointer',
-          }}
-        >
-          reset
-        </button>
-      </div>
-      <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-        {groups.map(([g, gLabel]) => (
-          <div key={g} className="flex flex-col gap-1">
-            <div
-              style={{
-                letterSpacing: '0.15em',
-                textTransform: 'uppercase',
-                color: 'var(--ink-faded)',
-                opacity: 0.7,
-                marginBottom: 2,
-              }}
-            >
-              {gLabel}
-            </div>
-            {VACUUM_SLIDERS.filter((s) => s.group === g).map((s) => {
-              const v = params[s.key] as number
-              return (
-                <label key={s.key} className="flex items-center gap-2">
-                  <span style={{ width: 88, color: 'var(--ink-faded)' }}>{s.label}</span>
-                  <input
-                    type="range"
-                    min={s.min}
-                    max={s.max}
-                    step={s.step}
-                    value={v}
-                    onChange={(e) =>
-                      onChange({ ...params, [s.key]: Number(e.target.value) })
-                    }
-                    style={{ flex: 1, minWidth: 0 }}
-                  />
-                  <span
-                    style={{
-                      width: 44,
-                      textAlign: 'right',
-                      color: 'var(--ink)',
-                      fontVariantNumeric: 'tabular-nums',
-                    }}
-                  >
-                    {s.step < 0.01 ? v.toFixed(3) : v.toFixed(2)}
-                  </span>
-                </label>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-      <div
-        className="flex items-center gap-3"
-        style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--rule)' }}
-      >
-        <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-          color
-        </span>
-        <select
-          value={params.colorTheme}
-          onChange={(e) =>
-            onChange({ ...params, colorTheme: e.target.value as GlassColorTheme })
-          }
-          style={{
-            background: 'transparent',
-            border: '1px solid var(--rule)',
-            color: 'var(--ink)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10,
-            padding: '2px 6px',
-            textTransform: 'lowercase',
-          }}
-        >
-          {GLASS_COLOR_THEMES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1" style={{ cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={params.colorReverse}
-            onChange={(e) =>
-              onChange({ ...params, colorReverse: e.target.checked })
-            }
-          />
-          <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-            reverse
-          </span>
-        </label>
-        <span style={{ flex: 1 }} />
-        <label className="flex items-center gap-2">
-          <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-            background
-          </span>
-          <input
-            type="color"
-            value={'#' + params.backgroundColor.toString(16).padStart(6, '0')}
-            onChange={(e) =>
-              onChange({
-                ...params,
-                backgroundColor: parseInt(e.target.value.slice(1), 16),
-              })
-            }
-            style={{
-              width: 26,
-              height: 18,
-              border: '1px solid var(--rule)',
-              background: 'transparent',
-              padding: 0,
-              cursor: 'pointer',
-            }}
-          />
-        </label>
-      </div>
-    </div>
-  )
-}
-
 export function BoltzCanvas() {
-  const { structure, error } = useBoltz()
-  const [viewMode, setViewMode] = useState<ViewMode>('cartoon')
-  // Per-mode params: switching between modes preserves each one's tuning
-  // state, so you can A/B them without re-dialing sliders.
-  const [glassParams, setGlassParams] = useState<GlassParams>(DEFAULT_GLASS_PARAMS)
-  const [crystalParams, setCrystalParams] = useState<GlassParams>(DEFAULT_CRYSTAL_PARAMS)
-  const [vacuumParams, setVacuumParams] = useState<VacuumParams>(DEFAULT_VACUUM_PARAMS)
-  const activeGlassParams = viewMode === 'crystal' ? crystalParams : glassParams
-  const setActiveGlassParams =
-    viewMode === 'crystal' ? setCrystalParams : setGlassParams
+  const { structure, error, streaming } = useBoltz()
+  const [engine, setEngine] = useState<Engine>('molstar')
+  const [metal, setMetal] = useState<Metal>('gold')
+  const [presets, setPresets] = useState<JewelryPresets>(BUNDLED_PRESETS)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+
+  const updateActivePreset = (next: JewelryPreset) =>
+    setPresets({ ...presets, [metal]: next })
+
+  const saveAllPresets = async () => {
+    setSaveState('saving')
+    try {
+      const res = await fetch('/__save_jewelry_preset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(presets, null, 2),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      setSaveState('saved')
+      setTimeout(() => setSaveState('idle'), 2500)
+    } catch (e) {
+      console.error('[BoltzCanvas] save preset failed:', e)
+      setSaveState('error')
+      setTimeout(() => setSaveState('idle'), 4000)
+    }
+  }
+
+  const resetActivePreset = () =>
+    setPresets({ ...presets, [metal]: BUNDLED_PRESETS[metal] })
+
   if (error) {
     return <p style={{ color: 'var(--destructive)' }}>{error}</p>
   }
@@ -1248,33 +1466,35 @@ export function BoltzCanvas() {
     return (
       <div className="flex h-full min-h-[280px] items-center justify-center">
         <p className="max-w-md text-center" style={{ color: 'var(--ink-faded)' }}>
-          Load a structure on the left to inspect it. The viewer is Mol*,
-          configured for a paper-tinted backdrop and the field-guide
-          register; right-click for advanced controls.
+          Load a structure on the left to inspect it. Chains render as a
+          polished metal armature inside a translucent gem shell; confidence
+          drives both wire thickness and gem tint.
         </p>
       </div>
     )
   }
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex justify-end">
-        <ViewModeToggle value={viewMode} onChange={setViewMode} />
+      <div className="flex items-center justify-end gap-4">
+        <EngineToggle value={engine} onChange={setEngine} />
+        {engine === 'molstar' && (
+          <MetalToggle value={metal} presets={presets} onChange={setMetal} />
+        )}
       </div>
-      <MolViewer
-        structure={structure}
-        viewMode={viewMode}
-        glassParams={activeGlassParams}
-        vacuumParams={vacuumParams}
-      />
-      {(viewMode === 'glass' || viewMode === 'crystal') && (
-        <GlassSlidersPanel
-          mode={viewMode}
-          params={activeGlassParams}
-          onChange={setActiveGlassParams}
-        />
+      {engine === 'molstar' ? (
+        <MolViewer structure={structure} metal={metal} presets={presets} streaming={streaming} />
+      ) : (
+        <MoleroViewer structure={structure} />
       )}
-      {viewMode === 'vacuum' && (
-        <VacuumSlidersPanel params={vacuumParams} onChange={setVacuumParams} />
+      {engine === 'molstar' && (
+        <JewelrySettingsPanel
+          metal={metal}
+          preset={presets[metal]}
+          onChange={updateActivePreset}
+          onSave={saveAllPresets}
+          onReset={resetActivePreset}
+          saveState={saveState}
+        />
       )}
     </div>
   )

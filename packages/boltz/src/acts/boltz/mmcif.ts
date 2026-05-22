@@ -58,6 +58,7 @@ function residueLabel(letter: string, type: ChainType): string {
     case 'protein': return PROTEIN_THREE_LETTER[upper] ?? 'UNK'
     case 'rna':     return RNA_RESIDUE[upper] ?? 'N'
     case 'dna':     return DNA_RESIDUE[upper] ?? 'DN'
+    case 'ligand':  return 'UNK' // unreachable — ligand path emits the CCD code directly.
   }
 }
 
@@ -187,8 +188,14 @@ export function writeMmcif(opts: {
     const entity = entityId[tokenIdx] | 0
     const resInChain = residueIndex[tokenIdx] | 0
     const chain = chains[asym]
-    const aaLetter = chain?.sequence[resInChain] ?? 'X'
-    const compId = chain ? residueLabel(aaLetter, chain.type) : 'UNK'
+    // Ligand chains carry the CCD code in `sequence`; polymer chains carry
+    // the letter string indexed by per-chain residue position.
+    const compId = chain
+      ? (chain.type === 'ligand'
+          ? chain.sequence.toUpperCase()
+          : residueLabel(chain.sequence[resInChain] ?? 'X', chain.type))
+      : 'UNK'
+    const groupPDB = chain?.type === 'ligand' ? 'HETATM' : 'ATOM'
     const seqId = resInChain + 1
     const chainCode = chainLetter(asym)
     // mmCIF entity_id is 1-based per the spec.
@@ -202,7 +209,7 @@ export function writeMmcif(opts: {
     const occupancy = 1.0
     lines.push(
       [
-        'ATOM',
+        groupPDB,
         serial,
         element,
         atomName,
