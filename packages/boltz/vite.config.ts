@@ -12,12 +12,42 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
  * outside `vite` dev (no middleware is registered on build/preview).
  */
 function jewelryPresetSavePlugin(): Plugin {
-  const target = path.resolve(__dirname, 'src/acts/boltz/jewelry-presets.json')
+  return makePresetSavePlugin(
+    'corundum-jewelry-preset-save',
+    '/__save_jewelry_preset',
+    'src/acts/boltz/jewelry-presets.json',
+    'jewelry-preset',
+  )
+}
+
+/**
+ * Dev-only endpoint: POST /__save_glass_preset writes to
+ * src/molero/glass-preset.json. The Molero glass settings panel uses
+ * this to persist the user's tuned surface + material params.
+ */
+function glassPresetSavePlugin(): Plugin {
+  return makePresetSavePlugin(
+    'corundum-glass-preset-save',
+    '/__save_glass_preset',
+    'src/molero/glass-preset.json',
+    'glass-preset',
+  )
+}
+
+/** Shared body of the preset-save plugins — they only differ by URL +
+ *  target file + log tag. */
+function makePresetSavePlugin(
+  name: string,
+  route: string,
+  relTarget: string,
+  logTag: string,
+): Plugin {
+  const target = path.resolve(__dirname, relTarget)
   return {
-    name: 'corundum-jewelry-preset-save',
+    name,
     apply: 'serve',
     configureServer(server) {
-      server.middlewares.use('/__save_jewelry_preset', async (req, res) => {
+      server.middlewares.use(route, async (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405
           res.end('POST only')
@@ -32,7 +62,7 @@ function jewelryPresetSavePlugin(): Plugin {
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify({ ok: true, path: target }))
           server.config.logger.info(
-            `\x1b[32m[jewelry-preset]\x1b[0m wrote ${path.relative(__dirname, target)}`,
+            `\x1b[32m[${logTag}]\x1b[0m wrote ${path.relative(__dirname, target)}`,
           )
         } catch (e) {
           res.statusCode = 400
@@ -70,6 +100,7 @@ export default defineConfig({
     // qualify even on private IPs — other devices need https://<lan-ip>.
     basicSsl(),
     jewelryPresetSavePlugin(),
+    glassPresetSavePlugin(),
   ],
   resolve: {
     alias: {

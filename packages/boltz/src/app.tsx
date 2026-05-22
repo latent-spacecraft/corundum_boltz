@@ -1,16 +1,19 @@
 /**
- * App shell — three columns wrap the Boltz act, with the WebGPU debug
- * panel as a collapsible drawer at the bottom.
+ * App shell — two columns: input on the left, canvas takes the rest.
  *
- *   ┌───────────┬──────────────────────────────┬───────────┐
- *   │  Input    │           Canvas             │  Output   │
- *   │  (FASTA,  │      (Mol* viewer)           │  (stats,  │
- *   │  engine,  │                              │  header)  │
- *   │  predict) │                              │           │
- *   └───────────┴──────────────────────────────┴───────────┘
+ *   ┌───────────┬──────────────────────────────────────────┐
+ *   │  Input    │            Canvas (Molero)               │
+ *   │  (FASTA,  │                                          │
+ *   │  predict) │                                          │
+ *   └───────────┴──────────────────────────────────────────┘
  *   ▶ WebGPU debug
+ *
+ * The legacy Output pane (mmCIF stats / provenance) was pulled when the
+ * canvas became the entire story; nothing it surfaced wasn't already
+ * captured by the console + the act's predict-panel status line. The
+ * Mol* viewer is also gone — Molero is the sole renderer now.
  */
-import { BoltzCanvas, BoltzInput, BoltzOutput } from './acts/boltz/BoltzAct'
+import { BoltzCanvas, BoltzInput } from './acts/boltz/BoltzAct'
 import { LigandDrawer } from './acts/boltz/LigandDrawer'
 import { GemShellDrawer } from './acts/boltz/GemShellDrawer'
 import { WebGpuDebug } from './debug/WebGpuDebug'
@@ -52,15 +55,12 @@ export function App() {
         </div>
       </header>
 
-      <main className="grid flex-1 grid-cols-1 gap-px lg:grid-cols-[340px_1fr_320px]" style={{ background: 'var(--rule)' }}>
+      <main className="grid flex-1 grid-cols-1 gap-px lg:grid-cols-[340px_1fr]" style={{ background: 'var(--rule)' }}>
         <Pane title="Input" ordinal="I">
           <BoltzInput />
         </Pane>
         <Pane title="Canvas" ordinal="II">
           <BoltzCanvas />
-        </Pane>
-        <Pane title="Output" ordinal="III">
-          <BoltzOutput />
         </Pane>
       </main>
 

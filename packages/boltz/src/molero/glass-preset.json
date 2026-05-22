@@ -1,0 +1,16 @@
+{
+  "resolution": 64,
+  "probeRadius": 1,
+  "sigmaFactor": 1,
+  "isolation": 1.5,
+  "padding": 8,
+  "ior": 2.06,
+  "thickness": 0.25,
+  "maxTransmission": 1,
+  "minTransmission": 0.97,
+  "roughnessMin": 0,
+  "roughnessMax": 0.04,
+  "clearcoat": 0,
+  "clearcoatRoughness": 0,
+  "envMapIntensity": 1
+}

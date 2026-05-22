@@ -56,6 +56,10 @@ export interface SpherePassOptions {
    *  use a plain MeshPhysicalNodeMaterial with the instance color and
    *  no other channel routing. */
   propertyChannels: boolean
+  /** Optional per-atom filter — return true to render an instance for
+   *  that atom. Used by the cartoon representation to hide backbone
+   *  atoms (which the ribbon already shows). */
+  atomFilter?: (atomIndex: number) => boolean
 }
 
 export const DEFAULT_SPHERE_OPTIONS: SpherePassOptions = {
@@ -77,9 +81,21 @@ export function createSpherePass(
 ): SpherePassResources {
   const opts = { ...DEFAULT_SPHERE_OPTIONS, ...partial }
   const geometry = new IcosahedronGeometry(1, opts.detail)
-  const material = buildMaterial(scene, geometry, opts)
 
-  const count = scene.attrs.count
+  const totalCount = scene.attrs.count
+  const filter = opts.atomFilter
+  // First pass — pick out the atoms that pass the filter so we can size
+  // the InstancedMesh exactly. Without this an unfiltered tail of the
+  // buffer renders at the identity matrix as a sphere stack at origin.
+  const indices = filter ? new Int32Array(totalCount) : null
+  let count = totalCount
+  if (filter && indices) {
+    count = 0
+    for (let i = 0; i < totalCount; i++) {
+      if (filter(i)) indices[count++] = i
+    }
+  }
+  const material = buildMaterial(scene, geometry, opts, indices, count)
   const mesh = new InstancedMesh(geometry, material, count)
   mesh.frustumCulled = false
 
@@ -89,7 +105,8 @@ export function createSpherePass(
   const { position, radius, color } = scene.attrs
   const scale = opts.scale
 
-  for (let i = 0; i < count; i++) {
+  for (let outI = 0; outI < count; outI++) {
+    const i = indices ? indices[outI] : outI
     const r = radius[i] * scale
     tmpMatrix.makeScale(r, r, r)
     tmpMatrix.setPosition(
@@ -97,13 +114,13 @@ export function createSpherePass(
       position[i * 3 + 1],
       position[i * 3 + 2],
     )
-    mesh.setMatrixAt(i, tmpMatrix)
+    mesh.setMatrixAt(outI, tmpMatrix)
     tmpColor.setRGB(
       color[i * 3],
       color[i * 3 + 1],
       color[i * 3 + 2],
     )
-    mesh.setColorAt(i, tmpColor)
+    mesh.setColorAt(outI, tmpColor)
   }
   mesh.instanceMatrix.needsUpdate = true
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
@@ -127,6 +144,8 @@ function buildMaterial(
   scene: MoleroScene,
   geometry: IcosahedronGeometry,
   opts: SpherePassOptions,
+  indices: Int32Array | null,
+  instanceCount: number,
 ): MeshPhysicalNodeMaterial {
   const material = new MeshPhysicalNodeMaterial({
     metalness: 0.0,
@@ -138,13 +157,14 @@ function buildMaterial(
 
   if (!opts.propertyChannels) return material
 
-  const { count, formalCharge, hybridization, bfactor, flags } = scene.attrs
-  const packed = new Float32Array(count * 4)
-  for (let i = 0; i < count; i++) {
-    packed[i * 4]     = formalCharge[i]
-    packed[i * 4 + 1] = hybridization[i]
-    packed[i * 4 + 2] = bfactor[i]
-    packed[i * 4 + 3] = flags[i]
+  const { formalCharge, hybridization, bfactor, flags } = scene.attrs
+  const packed = new Float32Array(instanceCount * 4)
+  for (let outI = 0; outI < instanceCount; outI++) {
+    const i = indices ? indices[outI] : outI
+    packed[outI * 4]     = formalCharge[i]
+    packed[outI * 4 + 1] = hybridization[i]
+    packed[outI * 4 + 2] = bfactor[i]
+    packed[outI * 4 + 3] = flags[i]
   }
   const channelAttr = new InstancedBufferAttribute(packed, 4)
   channelAttr.setUsage(0x88e4 /* STATIC_DRAW */)

@@ -22,7 +22,7 @@ export interface GemLogoProps {
   title?: string
 }
 
-export function GemLogo({ size = 64, onClick, title = 'Corundum' }: GemLogoProps) {
+export function GemLogo({ size = 24, onClick, title = 'Corundum' }: GemLogoProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -55,7 +55,7 @@ export function GemLogo({ size = 64, onClick, title = 'Corundum' }: GemLogoProps
     const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 100)
     // 3/4 view: lifted + offset so the facet topology reads on every rotation
     // frame instead of looking like a flat dart silhouette dead-on.
-    camera.position.set(0, 0, 4.0)
+    camera.position.set(0, 0, 5.0)
     camera.lookAt(0, 0, 0)
 
     const root = new THREE.Group()
@@ -82,7 +82,7 @@ export function GemLogo({ size = 64, onClick, title = 'Corundum' }: GemLogoProps
             // distance) on a corundum-IOR base, with mild dispersion for the
             // spectral fringe you'd see on a real polished ruby. Shares the
             // same factory the structure gem-shell overlay will pull from.
-            const mat = createGemMaterial(GEM_PRESETS.sapphire)
+            const mat = createGemMaterial(GEM_PRESETS.ruby)
             // Free the source material the loader created.
             const prev = mesh.material as THREE.Material | THREE.Material[]
             if (Array.isArray(prev)) prev.forEach((m) => m.dispose())
@@ -125,7 +125,7 @@ export function GemLogo({ size = 64, onClick, title = 'Corundum' }: GemLogoProps
       phase += dt * -0.20944 // rad/s ≈ 30 s/rotation
       //root.rotation.y = phase/4
       root.rotation.z = phase
-      //root.rotation.x = Math.sin(phase * 1.0) * 0.12
+      root.rotation.x = Math.sin(phase * 5.0) * 0.2
       renderer.render(scene, camera)
     }
     raf = requestAnimationFrame(tick)

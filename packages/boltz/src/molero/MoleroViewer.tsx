@@ -32,7 +32,15 @@ import { parsePdb } from './parsers/pdb'
 import { buildScene } from './scene/scene'
 import { createSpherePass, type SpherePassResources } from './passes/sphere'
 import { createStickPass, type StickPassResources } from './passes/stick'
+import { createRibbonPass, type RibbonPassResources } from './passes/ribbon'
+import {
+  buildGaussianSurface,
+  type GaussianSurfaceResources,
+} from './passes/gaussian-surface'
+import { createGlassPass, type GlassPassResources } from './passes/glass'
 import { computeBonds } from './chemistry/bonds'
+import { BUNDLED_GLASS_PRESET, splitPreset, type GlassPreset } from './glass-preset'
+import { AtomFlag } from './scene/scene'
 
 export interface MoleroStructure {
   data: string
@@ -40,8 +48,24 @@ export interface MoleroStructure {
   id: string
 }
 
+/**
+ * Which render passes Molero mounts.
+ *   - 'ball-stick': every atom + every bond. Full atomic detail; the
+ *                   inspection view.
+ *   - 'cartoon':    ribbon (tube) + sidechain ball-and-stick. Backbone
+ *                   atoms and backbone-only bonds are hidden — the
+ *                   ribbon already carries that signal.
+ *   - 'glass':      SASA-modulated refractive shell only.
+ *   - 'all':        cartoon + glass (composited via Three.js transmission).
+ */
+export type MoleroRepresentation = 'ball-stick' | 'cartoon' | 'glass' | 'all'
+
 export interface MoleroViewerProps {
   structure: MoleroStructure | null
+  representation?: MoleroRepresentation
+  /** Override the bundled glass preset (from a tuning panel etc.). Only
+   *  consumed when representation includes the glass pass. */
+  glassPreset?: GlassPreset
   className?: string
 }
 
@@ -55,9 +79,17 @@ interface RendererState {
   disposed: boolean
   spherePass: SpherePassResources | null
   stickPass: StickPassResources | null
+  ribbonPass: RibbonPassResources | null
+  surface: GaussianSurfaceResources | null
+  glassPass: GlassPassResources | null
 }
 
-export function MoleroViewer({ structure, className }: MoleroViewerProps) {
+export function MoleroViewer({
+  structure,
+  representation = 'cartoon',
+  glassPreset = BUNDLED_GLASS_PRESET,
+  className,
+}: MoleroViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stateRef = useRef<RendererState | null>(null)
@@ -127,6 +159,9 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
           disposed: false,
           spherePass: null,
           stickPass: null,
+          ribbonPass: null,
+          surface: null,
+          glassPass: null,
         }
         stateRef.current = s
 
@@ -154,6 +189,9 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
         cancelAnimationFrame(s.raf)
         if (s.spherePass) s.spherePass.dispose()
         if (s.stickPass) s.stickPass.dispose()
+        if (s.ribbonPass) s.ribbonPass.dispose()
+        if (s.glassPass) s.glassPass.dispose()
+        if (s.surface) s.surface.dispose()
         s.controls.dispose()
         s.pmrem.dispose()
         s.renderer.dispose()
@@ -179,10 +217,11 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
     return () => ro.disconnect()
   }, [])
 
-  // Effect 3 — load / replace structure.
+  // Effect 3 — load / replace structure / swap representation.
   useEffect(() => {
     const s = stateRef.current
     if (!s || !ready) return
+    // Tear down current passes.
     if (s.spherePass) {
       s.scene.remove(s.spherePass.mesh)
       s.spherePass.dispose()
@@ -192,6 +231,20 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
       s.scene.remove(s.stickPass.mesh)
       s.stickPass.dispose()
       s.stickPass = null
+    }
+    if (s.ribbonPass) {
+      s.scene.remove(s.ribbonPass.group)
+      s.ribbonPass.dispose()
+      s.ribbonPass = null
+    }
+    if (s.glassPass) {
+      s.scene.remove(s.glassPass.mesh)
+      s.glassPass.dispose()
+      s.glassPass = null
+    }
+    if (s.surface) {
+      s.surface.dispose()
+      s.surface = null
     }
     if (!structure) return
 
@@ -203,19 +256,69 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
       const built = buildScene(parsed)
       const tParse = performance.now() - t0
 
-      const tBonds0 = performance.now()
-      const bonds = computeBonds(built.attrs, built.bbox)
-      const tBonds = performance.now() - tBonds0
+      // ball-stick: full atomic detail (every atom + every bond).
+      // cartoon:    ribbon + ball-and-stick on sidechain atoms only.
+      // glass:      gem shell only.
+      // all:        cartoon + glass (composited via transmission).
+      const wantSpheresOrSticks =
+        representation === 'ball-stick' ||
+        representation === 'cartoon' ||
+        representation === 'all'
+      const wantCartoon = representation === 'cartoon' || representation === 'all'
+      const wantGlass = representation === 'glass' || representation === 'all'
+      const hideBackbone = wantCartoon // cartoon hides backbone atoms / backbone-only bonds
 
-      // Spheres slightly smaller when sticks are present — gives the
-      // ball-and-stick aesthetic instead of fused vdW blobs.
-      const sphere = createSpherePass(built, { scale: 0.28 })
-      s.scene.add(sphere.mesh)
-      s.spherePass = sphere
+      let bondCount = 0
+      let tBonds = 0
+      if (wantSpheresOrSticks) {
+        const tBonds0 = performance.now()
+        const bonds = computeBonds(built.attrs, built.bbox)
+        tBonds = performance.now() - tBonds0
+        bondCount = bonds.count
 
-      const stick = createStickPass(built, bonds)
-      s.scene.add(stick.mesh)
-      s.stickPass = stick
+        const flagsArr = built.attrs.flags
+        const isBackbone = (i: number) => (flagsArr[i] & AtomFlag.Backbone) !== 0
+        // Cartoon: hide pure-backbone atoms (N, Cα, C, O — the ribbon
+        // already carries those). Sidechain atoms render.
+        const atomFilter = hideBackbone
+          ? (i: number) => !isBackbone(i)
+          : undefined
+        // Cartoon: drop bonds where both endpoints are backbone (Cα-C,
+        // C-N, etc — also covered by the ribbon). Keep bonds where at
+        // least one end is sidechain (Cα-Cβ et al — the attachment).
+        const bondFilter = hideBackbone
+          ? (a: number, b: number) => !(isBackbone(a) && isBackbone(b))
+          : undefined
+
+        // Spheres shrink when sticks are present (ball-and-stick look).
+        const sphere = createSpherePass(built, { scale: 0.28, atomFilter })
+        s.scene.add(sphere.mesh)
+        s.spherePass = sphere
+
+        const stick = createStickPass(built, bonds, { bondFilter })
+        s.scene.add(stick.mesh)
+        s.stickPass = stick
+      }
+
+      if (wantCartoon) {
+        const ribbon = createRibbonPass(built)
+        s.scene.add(ribbon.group)
+        s.ribbonPass = ribbon
+      }
+
+      let tGlass = 0
+      let surfaceVerts = 0
+      if (wantGlass) {
+        const tG0 = performance.now()
+        const { surface: surfaceOpts, material: materialOpts } = splitPreset(glassPreset)
+        const surf = buildGaussianSurface(built, surfaceOpts)
+        s.surface = surf
+        surfaceVerts = surf.vertexCount
+        const glass = createGlassPass(surf.geometry, materialOpts)
+        s.scene.add(glass.mesh)
+        s.glassPass = glass
+        tGlass = performance.now() - tG0
+      }
 
       // Frame the camera around the structure.
       const [cx, cy, cz] = built.center
@@ -228,19 +331,22 @@ export function MoleroViewer({ structure, className }: MoleroViewerProps) {
       s.controls.update()
 
       console.log(
-        '[Molero] %d atoms / %d residues / %d chains (parse %sms) / %d bonds (perceive %sms)',
+        '[Molero] %d atoms / %d residues / %d chains (parse %sms) / %d bonds (%sms) / %s%s / rep=%s',
         built.attrs.count,
         built.residues.length,
         built.chains.length,
         tParse.toFixed(1),
-        bonds.count,
+        bondCount,
         tBonds.toFixed(1),
+        wantGlass ? `${surfaceVerts} surf verts (${tGlass.toFixed(0)}ms)` : 'no glass',
+        '',
+        representation,
       )
     } catch (e) {
       console.error('[Molero] structure load failed:', e)
       setError((e as Error).message)
     }
-  }, [structure, ready])
+  }, [structure, ready, representation, glassPreset])
 
   return (
     <div

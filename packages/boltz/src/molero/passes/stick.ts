@@ -42,6 +42,10 @@ export interface StickPassOptions {
   /** Whether to draw bonds beyond a max length (catch atom-clash spurious
    *  edges). Defaults to filtering out anything longer than maxLength. */
   maxLength: number
+  /** Optional per-bond filter — return true to render. Used by the
+   *  cartoon representation to drop backbone-only bonds (the ribbon
+   *  already covers those). */
+  bondFilter?: (atomA: number, atomB: number) => boolean
   material: {
     metalness: number
     roughness: number
@@ -89,17 +93,19 @@ export function createStickPass(
     envMapIntensity: opts.material.envMapIntensity,
   })
 
-  // First pass — count bonds that pass the maxLength filter so we can
+  // First pass — count bonds that pass length + user filters so we can
   // size the InstancedMesh exactly.
   const { atomA, atomB, flags } = bonds
   const N = bonds.count
   const position = scene.attrs.position
   const color = scene.attrs.color
   const maxLen2 = opts.maxLength * opts.maxLength
+  const filter = opts.bondFilter
 
   let kept = 0
   for (let i = 0; i < N; i++) {
     const a = atomA[i], b = atomB[i]
+    if (filter && !filter(a, b)) continue
     const dx = position[b * 3]     - position[a * 3]
     const dy = position[b * 3 + 1] - position[a * 3 + 1]
     const dz = position[b * 3 + 2] - position[a * 3 + 2]
@@ -120,6 +126,7 @@ export function createStickPass(
   let out = 0
   for (let i = 0; i < N; i++) {
     const a = atomA[i], b = atomB[i]
+    if (filter && !filter(a, b)) continue
     const ax = position[a * 3]
     const ay = position[a * 3 + 1]
     const az = position[a * 3 + 2]
@@ -177,6 +184,7 @@ function mergeOpts(
     metallicRadiusFactor: partial.metallicRadiusFactor ?? base.metallicRadiusFactor,
     radialSegments: partial.radialSegments ?? base.radialSegments,
     maxLength: partial.maxLength ?? base.maxLength,
+    bondFilter: partial.bondFilter ?? base.bondFilter,
     material: { ...base.material, ...(partial.material ?? {}) },
   }
 }

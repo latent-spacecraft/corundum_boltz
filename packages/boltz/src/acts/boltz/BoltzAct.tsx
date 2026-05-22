@@ -18,16 +18,9 @@
 import { create } from 'zustand'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import {
-  MolViewer,
-  METALS,
-  BUNDLED_PRESETS,
-  type StructurePayload,
-  type Metal,
-  type JewelryPreset,
-  type JewelryPresets,
-} from './MolViewer'
-import { MoleroViewer } from '@/molero/MoleroViewer'
+import type { StructurePayload } from './MolViewer'
+import { MoleroViewer, type MoleroRepresentation } from '@/molero/MoleroViewer'
+import { BUNDLED_GLASS_PRESET, type GlassPreset } from '@/molero/glass-preset'
 import { useModelSession } from '@/hooks/useModelSession'
 import { formatBytes } from '@/engine/fetcher'
 import {
@@ -1060,45 +1053,43 @@ function FeaturizerSelfCheck() {
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Canvas slot — jewelry mode only. The user picks a metal; the wire/shell
-// material is locked to the jewelry register. No slider noise.
-
-function MetalToggle({
+function RepresentationToggle({
   value,
-  presets,
   onChange,
 }: {
-  value: Metal
-  presets: JewelryPresets
-  onChange: (v: Metal) => void
+  value: MoleroRepresentation
+  onChange: (v: MoleroRepresentation) => void
 }) {
+  const items: { key: MoleroRepresentation; label: string; title: string }[] = [
+    { key: 'ball-stick', label: 'B+S',     title: 'Every atom + every bond — full atomic detail' },
+    { key: 'cartoon',    label: 'Cartoon', title: 'Ribbon + sidechain ball+stick (backbone hidden)' },
+    { key: 'glass',      label: 'Glass',   title: 'SASA-modulated refractive shell only' },
+    { key: 'all',        label: 'All',     title: 'Cartoon + sidechains composited inside the glass shell' },
+  ]
   return (
     <div
       role="radiogroup"
-      aria-label="Metal"
+      aria-label="Representation"
       className="flex items-center gap-0 font-mono text-[10px] uppercase tracking-widest"
       style={{ color: 'var(--ink-faded)' }}
     >
-      <span style={{ marginRight: 8 }}>metal</span>
-      {METALS.map((m, i) => {
-        const active = value === m
+      <span style={{ marginRight: 8 }}>rep</span>
+      {items.map((it, i) => {
+        const active = value === it.key
         return (
           <button
-            key={m}
+            key={it.key}
             type="button"
             role="radio"
             aria-checked={active}
-            onClick={() => onChange(m)}
-            title={m}
+            onClick={() => onChange(it.key)}
+            title={it.title}
             style={{
               padding: '2px 10px',
               border: '1px solid var(--rule)',
               borderLeftWidth: i === 0 ? 1 : 0,
-              background: active
-                ? `#${presets[m].color.toString(16).padStart(6, '0')}`
-                : 'transparent',
-              color: active ? '#1a1410' : 'var(--ink-faded)',
+              background: active ? 'var(--ink)' : 'transparent',
+              color: active ? 'var(--paper)' : 'var(--ink-faded)',
               fontFamily: 'var(--font-mono)',
               fontSize: 10,
               letterSpacing: '0.15em',
@@ -1106,7 +1097,7 @@ function MetalToggle({
               cursor: 'pointer',
             }}
           >
-            {m}
+            {it.label}
           </button>
         )
       })}
@@ -1114,94 +1105,58 @@ function MetalToggle({
   )
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Material settings panel — every numeric param in the active metal's
-// preset, grouped. The user adjusts, hits Save to persist to
-// jewelry-presets.json via a dev-only Vite middleware.
 
-type SliderGroupKey = 'metal' | 'scene' | 'lighting' | 'wire' | 'sidechain' | 'ligand' | 'shell'
-interface NumSlider {
-  key: keyof JewelryPreset
+// ─────────────────────────────────────────────────────────────────────────────
+// Glass settings — slider definitions for the SASA-modulated refractive shell.
+
+type GlassSliderGroup = 'surface' | 'material'
+interface GlassSlider {
+  key: keyof GlassPreset
   label: string
   min: number
   max: number
   step: number
-  group: SliderGroupKey
+  group: GlassSliderGroup
 }
-const NUM_SLIDERS: NumSlider[] = [
-  // metal armature material
-  { key: 'metalness',           label: 'metalness',         min: 0,    max: 1,    step: 0.01,  group: 'metal' },
-  { key: 'roughness',           label: 'roughness',         min: 0,    max: 1,    step: 0.01,  group: 'metal' },
-  { key: 'emissive',            label: 'emissive',          min: 0,    max: 1,    step: 0.01,  group: 'metal' },
-  // scene
-  { key: 'exposure',            label: 'exposure',          min: 0.3,  max: 3,    step: 0.05,  group: 'scene' },
-  { key: 'bloomStrength',       label: 'bloom strength',    min: 0,    max: 3,    step: 0.05,  group: 'scene' },
-  { key: 'bloomRadius',         label: 'bloom radius',      min: 0,    max: 2,    step: 0.05,  group: 'scene' },
-  { key: 'bloomThreshold',      label: 'bloom thresh',      min: 0,    max: 1,    step: 0.01,  group: 'scene' },
-  // studio rig — intensities only; positions/colors are baked into MolViewer
-  { key: 'ambientIntensity',    label: 'ambient',           min: 0,    max: 1,    step: 0.01,  group: 'lighting' },
-  { key: 'keyIntensity',        label: 'key',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
-  { key: 'fillIntensity',       label: 'fill',              min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
-  { key: 'rimIntensity',        label: 'rim',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
-  { key: 'topIntensity',        label: 'top',               min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
-  { key: 'bounceIntensity',     label: 'bounce',            min: 0,    max: 3,    step: 0.05,  group: 'lighting' },
-  // wire (putty)
-  { key: 'wireSizeFactor',      label: 'size factor',       min: 0.05, max: 3,    step: 0.05,  group: 'wire' },
-  { key: 'wireBaseSize',        label: 'base size',         min: 0,    max: 2,    step: 0.05,  group: 'wire' },
-  { key: 'wireBfactorFactor',   label: 'B-fact factor',     min: 0,    max: 0.05, step: 0.001, group: 'wire' },
-  // side chains
-  { key: 'sideChainSizeFactor', label: 'size factor',       min: 0.05, max: 1,    step: 0.01,  group: 'sidechain' },
-  { key: 'sideChainAspectRatio',label: 'aspect ratio',      min: 0.1,  max: 2,    step: 0.05,  group: 'sidechain' },
-  { key: 'sideChainBondScale',  label: 'bond scale',        min: 0.05, max: 1,    step: 0.01,  group: 'sidechain' },
-  // ligand
-  { key: 'ligandSizeFactor',    label: 'size factor',       min: 0.05, max: 1.5,  step: 0.01,  group: 'ligand' },
-  { key: 'ligandAspectRatio',   label: 'aspect ratio',      min: 0.1,  max: 2,    step: 0.05,  group: 'ligand' },
-  { key: 'ligandBondScale',     label: 'bond scale',        min: 0.05, max: 1,    step: 0.01,  group: 'ligand' },
-  // shell (liquid-glass CSS backdrop-filter overlay)
-  { key: 'shellBlur',             label: 'blur',         min: 0,   max: 30,  step: 0.5,  group: 'shell' },
-  { key: 'shellBrightness',       label: 'brightness',   min: 0.5, max: 2,   step: 0.01, group: 'shell' },
-  { key: 'shellSaturation',       label: 'saturation',   min: 0,   max: 3,   step: 0.05, group: 'shell' },
-  { key: 'shellEnvelopePad',      label: 'envelope pad', min: 0,   max: 60,  step: 1,    group: 'shell' },
-  { key: 'shellSmoothIterations', label: 'smoothing',    min: 0,   max: 4,   step: 1,    group: 'shell' },
-  { key: 'shellTintAmount',       label: 'tint amount',  min: 0,   max: 1,   step: 0.01, group: 'shell' },
-  { key: 'shellEdgeHighlight',    label: 'edge rim',     min: 0,   max: 1,   step: 0.01, group: 'shell' },
-  { key: 'shellEdgeWidth',        label: 'edge width',   min: 0,   max: 60,  step: 1,    group: 'shell' },
+const GLASS_SLIDERS: GlassSlider[] = [
+  // Surface — geometry build
+  { key: 'resolution',       label: 'mc resolution', min: 32,   max: 128,  step: 4,    group: 'surface' },
+  { key: 'probeRadius',      label: 'probe radius',  min: 0.5,  max: 3.0,  step: 0.05, group: 'surface' },
+  { key: 'sigmaFactor',      label: 'sigma factor',  min: 0.4,  max: 1.8,  step: 0.02, group: 'surface' },
+  { key: 'isolation',        label: 'isolation',     min: 0.05, max: 2.0,  step: 0.01, group: 'surface' },
+  { key: 'padding',          label: 'bbox pad',      min: 1,    max: 15,   step: 0.5,  group: 'surface' },
+  // Material — TSL channels
+  { key: 'ior',              label: 'ior',           min: 1.0,  max: 2.5,  step: 0.01, group: 'material' },
+  { key: 'thickness',        label: 'thickness',     min: 0,    max: 5,    step: 0.05, group: 'material' },
+  { key: 'maxTransmission',  label: 'transmit max',  min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'minTransmission',  label: 'transmit min',  min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'roughnessMin',     label: 'roughness min', min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'roughnessMax',     label: 'roughness max', min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'clearcoat',        label: 'clearcoat',     min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'clearcoatRoughness', label: 'cc rough',    min: 0,    max: 1,    step: 0.01, group: 'material' },
+  { key: 'envMapIntensity',  label: 'env intensity', min: 0,    max: 3,    step: 0.05, group: 'material' },
 ]
-const GROUP_ORDER: SliderGroupKey[] = ['metal', 'scene', 'lighting', 'wire', 'sidechain', 'ligand', 'shell']
-const GROUP_LABEL: Record<SliderGroupKey, string> = {
-  metal: 'metal',
-  scene: 'scene',
-  lighting: 'lighting',
-  wire: 'wire',
-  sidechain: 'side chains',
-  ligand: 'ligand',
-  shell: 'shell',
+const GLASS_GROUP_ORDER: GlassSliderGroup[] = ['surface', 'material']
+const GLASS_GROUP_LABEL: Record<GlassSliderGroup, string> = {
+  surface: 'surface',
+  material: 'material',
 }
 
-function hexFromInt(n: number): string {
-  return '#' + (n & 0xffffff).toString(16).padStart(6, '0')
-}
-function intFromHex(s: string): number {
-  return parseInt(s.replace('#', ''), 16) & 0xffffff
-}
-
-function JewelrySettingsPanel({
-  metal,
+function GlassSettingsPanel({
   preset,
   onChange,
   onSave,
   onReset,
   saveState,
 }: {
-  metal: Metal
-  preset: JewelryPreset
-  onChange: (next: JewelryPreset) => void
+  preset: GlassPreset
+  onChange: (next: GlassPreset) => void
   onSave: () => void
   onReset: () => void
   saveState: 'idle' | 'saving' | 'saved' | 'error'
 }) {
   const [collapsed, setCollapsed] = useState(false)
-  const set = <K extends keyof JewelryPreset>(k: K, v: JewelryPreset[K]) =>
+  const set = <K extends keyof GlassPreset>(k: K, v: GlassPreset[K]) =>
     onChange({ ...preset, [k]: v })
   return (
     <div
@@ -1228,7 +1183,7 @@ function JewelrySettingsPanel({
           cursor: 'pointer',
         }}
       >
-        <span>{collapsed ? '▶' : '▼'}&nbsp;&nbsp;{metal} · material</span>
+        <span>{collapsed ? '▶' : '▼'}&nbsp;&nbsp;glass · material</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {saveState === 'saved' && (
             <span style={{ color: 'var(--oxblood)' }}>saved</span>
@@ -1240,48 +1195,11 @@ function JewelrySettingsPanel({
       </button>
       {!collapsed && (
         <div style={{ padding: '4px 12px 12px' }}>
-          {/* Color + background — special non-slider rows */}
+          {/* Action row */}
           <div
-            className="flex items-center gap-6"
+            className="flex items-center justify-end gap-2"
             style={{ paddingBottom: 8, marginBottom: 8, borderBottom: '1px solid var(--rule)' }}
           >
-            <label className="flex items-center gap-2">
-              <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-                color
-              </span>
-              <input
-                type="color"
-                value={hexFromInt(preset.color)}
-                onChange={(e) => set('color', intFromHex(e.target.value))}
-                style={{
-                  width: 26,
-                  height: 18,
-                  border: '1px solid var(--rule)',
-                  background: 'transparent',
-                  padding: 0,
-                  cursor: 'pointer',
-                }}
-              />
-            </label>
-            <label className="flex items-center gap-2">
-              <span style={{ letterSpacing: '0.15em', textTransform: 'uppercase' }}>
-                background
-              </span>
-              <input
-                type="color"
-                value={hexFromInt(preset.background)}
-                onChange={(e) => set('background', intFromHex(e.target.value))}
-                style={{
-                  width: 26,
-                  height: 18,
-                  border: '1px solid var(--rule)',
-                  background: 'transparent',
-                  padding: 0,
-                  cursor: 'pointer',
-                }}
-              />
-            </label>
-            <span style={{ flex: 1 }} />
             <button
               type="button"
               onClick={onReset}
@@ -1320,10 +1238,9 @@ function JewelrySettingsPanel({
             </button>
           </div>
 
-          <div className="grid grid-cols-3 gap-x-6 gap-y-1">
-            {GROUP_ORDER.map((g) => {
-              const sliders = NUM_SLIDERS.filter((s) => s.group === g)
-              if (sliders.length === 0) return null
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1">
+            {GLASS_GROUP_ORDER.map((g) => {
+              const sliders = GLASS_SLIDERS.filter((s) => s.group === g)
               return (
                 <div key={g} className="flex flex-col gap-1">
                   <div
@@ -1335,13 +1252,13 @@ function JewelrySettingsPanel({
                       marginBottom: 2,
                     }}
                   >
-                    {GROUP_LABEL[g]}
+                    {GLASS_GROUP_LABEL[g]}
                   </div>
                   {sliders.map((s) => {
                     const v = preset[s.key] as number
                     return (
                       <label key={s.key} className="flex items-center gap-2">
-                        <span style={{ width: 96, color: 'var(--ink-faded)' }}>
+                        <span style={{ width: 110, color: 'var(--ink-faded)' }}>
                           {s.label}
                         </span>
                         <input
@@ -1355,13 +1272,13 @@ function JewelrySettingsPanel({
                         />
                         <span
                           style={{
-                            width: 44,
+                            width: 50,
                             textAlign: 'right',
                             color: 'var(--ink)',
                             fontVariantNumeric: 'tabular-nums',
                           }}
                         >
-                          {s.step < 0.01 ? v.toFixed(3) : v.toFixed(2)}
+                          {s.step < 0.01 ? v.toFixed(3) : s.step >= 1 ? v.toFixed(0) : v.toFixed(2)}
                         </span>
                       </label>
                     )
@@ -1376,88 +1293,30 @@ function JewelrySettingsPanel({
   )
 }
 
-type Engine = 'molstar' | 'molero'
-
-function EngineToggle({
-  value,
-  onChange,
-}: {
-  value: Engine
-  onChange: (v: Engine) => void
-}) {
-  const items: { key: Engine; label: string; title: string }[] = [
-    { key: 'molstar', label: 'Mol*',  title: 'Mol* / jewelry register (default, full featured)' },
-    { key: 'molero', label: 'Molero', title: 'Molero / WebGPU (Phase 1 — spheres only)' },
-  ]
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Renderer engine"
-      className="flex items-center gap-0 font-mono text-[10px] uppercase tracking-widest"
-      style={{ color: 'var(--ink-faded)' }}
-    >
-      <span style={{ marginRight: 8 }}>engine</span>
-      {items.map((it, i) => {
-        const active = value === it.key
-        return (
-          <button
-            key={it.key}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(it.key)}
-            title={it.title}
-            style={{
-              padding: '2px 10px',
-              border: '1px solid var(--rule)',
-              borderLeftWidth: i === 0 ? 1 : 0,
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--paper)' : 'var(--ink-faded)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10,
-              letterSpacing: '0.15em',
-              textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
-            {it.label}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
 export function BoltzCanvas() {
-  const { structure, error, streaming } = useBoltz()
-  const [engine, setEngine] = useState<Engine>('molstar')
-  const [metal, setMetal] = useState<Metal>('gold')
-  const [presets, setPresets] = useState<JewelryPresets>(BUNDLED_PRESETS)
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const { structure, error } = useBoltz()
+  const [moleroRep, setMoleroRep] = useState<MoleroRepresentation>('cartoon')
+  const [glassPreset, setGlassPreset] = useState<GlassPreset>(BUNDLED_GLASS_PRESET)
+  const [glassSaveState, setGlassSaveState] =
+    useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
 
-  const updateActivePreset = (next: JewelryPreset) =>
-    setPresets({ ...presets, [metal]: next })
-
-  const saveAllPresets = async () => {
-    setSaveState('saving')
+  const saveGlassPreset = async () => {
+    setGlassSaveState('saving')
     try {
-      const res = await fetch('/__save_jewelry_preset', {
+      const res = await fetch('/__save_glass_preset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(presets, null, 2),
+        body: JSON.stringify(glassPreset, null, 2),
       })
       if (!res.ok) throw new Error(await res.text())
-      setSaveState('saved')
-      setTimeout(() => setSaveState('idle'), 2500)
+      setGlassSaveState('saved')
+      setTimeout(() => setGlassSaveState('idle'), 2500)
     } catch (e) {
-      console.error('[BoltzCanvas] save preset failed:', e)
-      setSaveState('error')
-      setTimeout(() => setSaveState('idle'), 4000)
+      console.error('[BoltzCanvas] save glass preset failed:', e)
+      setGlassSaveState('error')
+      setTimeout(() => setGlassSaveState('idle'), 4000)
     }
   }
-
-  const resetActivePreset = () =>
-    setPresets({ ...presets, [metal]: BUNDLED_PRESETS[metal] })
 
   if (error) {
     return <p style={{ color: 'var(--destructive)' }}>{error}</p>
@@ -1466,80 +1325,33 @@ export function BoltzCanvas() {
     return (
       <div className="flex h-full min-h-[280px] items-center justify-center">
         <p className="max-w-md text-center" style={{ color: 'var(--ink-faded)' }}>
-          Load a structure on the left to inspect it. Chains render as a
-          polished metal armature inside a translucent gem shell; confidence
-          drives both wire thickness and gem tint.
+          Load a structure on the left to inspect it. Atoms render as
+          property-channelled spheres + bonds; confidence drives emission;
+          chains weave through as colored cartoon ribbons.
         </p>
       </div>
     )
   }
+  const showGlassPanel = moleroRep === 'glass' || moleroRep === 'all'
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-end gap-4">
-        <EngineToggle value={engine} onChange={setEngine} />
-        {engine === 'molstar' && (
-          <MetalToggle value={metal} presets={presets} onChange={setMetal} />
-        )}
+      <div className="flex items-center justify-end">
+        <RepresentationToggle value={moleroRep} onChange={setMoleroRep} />
       </div>
-      {engine === 'molstar' ? (
-        <MolViewer structure={structure} metal={metal} presets={presets} streaming={streaming} />
-      ) : (
-        <MoleroViewer structure={structure} />
-      )}
-      {engine === 'molstar' && (
-        <JewelrySettingsPanel
-          metal={metal}
-          preset={presets[metal]}
-          onChange={updateActivePreset}
-          onSave={saveAllPresets}
-          onReset={resetActivePreset}
-          saveState={saveState}
+      <MoleroViewer
+        structure={structure}
+        representation={moleroRep}
+        glassPreset={glassPreset}
+      />
+      {showGlassPanel && (
+        <GlassSettingsPanel
+          preset={glassPreset}
+          onChange={setGlassPreset}
+          onSave={saveGlassPreset}
+          onReset={() => setGlassPreset(BUNDLED_GLASS_PRESET)}
+          saveState={glassSaveState}
         />
       )}
     </div>
-  )
-}
-
-export function BoltzOutput() {
-  const { structure, source } = useBoltz()
-  if (!structure) {
-    return (
-      <p
-        className="font-mono text-[10px] uppercase tracking-widest"
-        style={{ color: 'var(--ink-faded)' }}
-      >
-        No specimen mounted.
-      </p>
-    )
-  }
-
-  const lines = structure.data.split(/\r?\n/)
-  const atomCount = lines.filter((l) => l.startsWith('ATOM ') || l.startsWith('ATOM  ')).length
-  const hetCount = lines.filter((l) => l.startsWith('HETATM')).length
-  const headerLine =
-    structure.format === 'pdb'
-      ? lines.find((l) => l.startsWith('HEADER'))?.slice(10, 70).trim()
-      : lines.find((l) => l.startsWith('_struct.title'))?.split(/\s+/).slice(1).join(' ')
-
-  const rows: [string, string][] = [
-    ['Identifier', structure.id],
-    ['Format', structure.format.toUpperCase()],
-    ['Source', source],
-    ['ATOM records', String(atomCount)],
-    ['HETATM records', String(hetCount)],
-    ['Header', headerLine || '—'],
-  ]
-
-  return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
-      {rows.map(([k, v]) => (
-        <div key={k} className="contents">
-          <dt className="uppercase tracking-widest" style={{ color: 'var(--ink-faded)' }}>
-            {k}
-          </dt>
-          <dd style={{ color: 'var(--ink)', wordBreak: 'break-word' }}>{v}</dd>
-        </div>
-      ))}
-    </dl>
   )
 }

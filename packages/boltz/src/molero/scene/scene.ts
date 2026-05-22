@@ -127,6 +127,10 @@ export interface PropertyAttributes {
   totalH: Uint8Array           // [N]
   /** Backreference for picking / labelling. */
   atomicNumber: Uint8Array     // [N]
+  /** Interned atom name id (e.g. 'CA' → some int). Resolve via
+   *  atomNameFromId in parsers/mmcif. Used by backbone extraction and
+   *  any per-atom-name material routing. */
+  atomNameId: Uint32Array      // [N]
   residueIndex: Uint32Array    // [N]
   chainIndex: Uint16Array      // [N]
 }
@@ -257,6 +261,7 @@ export function buildScene(parsed: ParsedEntityGraph): Scene {
     flags,
     totalH,
     atomicNumber: new Uint8Array(atomicNumber.buffer, atomicNumber.byteOffset, A).slice(),
+    atomNameId: new Uint32Array(atomNameId.buffer, atomNameId.byteOffset, A).slice(),
     residueIndex: new Uint32Array(residueIndex.buffer, residueIndex.byteOffset, A).slice(),
     chainIndex: new Uint16Array(chainIndex.buffer, chainIndex.byteOffset, A).slice(),
   }
