@@ -38,12 +38,24 @@ import {
   type NucleicBasePassResources,
 } from './passes/nucleic-bases'
 import {
+  createSaltBridgePass,
+  type SaltBridgePassResources,
+} from './passes/salt-bridges'
+// H-bond pass (createHBondPass) is implemented in ./passes/h-bonds and
+// the detector lives in ./chemistry/h-bonds — both will be wired up
+// from the proximity-selection slice when the user clicks a residue.
+// Whole-structure H-bond display is too noisy at ~1 bond/residue.
+import type { HBondPassResources } from './passes/h-bonds'
+import {
   buildGaussianSurface,
   type GaussianSurfaceResources,
 } from './passes/gaussian-surface'
 import { createGlassPass, type GlassPassResources } from './passes/glass'
 import { computeBonds } from './chemistry/bonds'
 import { extractNucleicBases } from './chemistry/nucleic-bases'
+import { computeSaltBridges } from './chemistry/salt-bridges'
+// computeHBonds — see note above on the createHBondPass import.
+import { AtomFlag } from './scene/scene'
 import { BUNDLED_GLASS_PRESET, splitPreset, type GlassPreset } from './glass-preset'
 
 export interface MoleroStructure {
@@ -85,6 +97,8 @@ interface RendererState {
   stickPass: StickPassResources | null
   ribbonPass: RibbonPassResources | null
   nucleicBasePass: NucleicBasePassResources | null
+  saltBridgePass: SaltBridgePassResources | null
+  hBondPass: HBondPassResources | null
   surface: GaussianSurfaceResources | null
   glassPass: GlassPassResources | null
 }
@@ -166,6 +180,8 @@ export function MoleroViewer({
           stickPass: null,
           ribbonPass: null,
           nucleicBasePass: null,
+          saltBridgePass: null,
+          hBondPass: null,
           surface: null,
           glassPass: null,
         }
@@ -197,6 +213,8 @@ export function MoleroViewer({
         if (s.stickPass) s.stickPass.dispose()
         if (s.ribbonPass) s.ribbonPass.dispose()
         if (s.nucleicBasePass) s.nucleicBasePass.dispose()
+        if (s.saltBridgePass) s.saltBridgePass.dispose()
+        if (s.hBondPass) s.hBondPass.dispose()
         if (s.glassPass) s.glassPass.dispose()
         if (s.surface) s.surface.dispose()
         s.controls.dispose()
@@ -249,6 +267,16 @@ export function MoleroViewer({
       s.nucleicBasePass.dispose()
       s.nucleicBasePass = null
     }
+    if (s.saltBridgePass) {
+      s.scene.remove(s.saltBridgePass.group)
+      s.saltBridgePass.dispose()
+      s.saltBridgePass = null
+    }
+    if (s.hBondPass) {
+      s.scene.remove(s.hBondPass.group)
+      s.hBondPass.dispose()
+      s.hBondPass = null
+    }
     if (s.glassPass) {
       s.scene.remove(s.glassPass.mesh)
       s.glassPass.dispose()
@@ -284,30 +312,78 @@ export function MoleroViewer({
       }
 
       // ball-stick: full atomic detail (every atom + every bond).
-      // cartoon:    ribbon only — atoms hidden (sidechains will return as
-      //             a function of selection in a future slice).
+      // cartoon:    ribbon + charged-sidechain ball+stick endpoints +
+      //             salt-bridge glow arcs. Backbone atoms hidden (the
+      //             ribbon carries that signal); neutral sidechains
+      //             hidden (cuts visual noise — they'll come back via
+      //             selection in a future slice).
       // glass:      gem shell only.
       // all:        cartoon + glass (composited via transmission).
       const wantBallStick = representation === 'ball-stick'
       const wantCartoon = representation === 'cartoon' || representation === 'all'
       const wantGlass = representation === 'glass' || representation === 'all'
+      const wantChargedSidechains = wantCartoon
 
       let bondCount = 0
       let tBonds = 0
-      if (wantBallStick) {
+      let saltBridgeCount = 0
+      if (wantBallStick || wantChargedSidechains) {
         const tBonds0 = performance.now()
         const bonds = computeBonds(built.attrs, built.bbox)
         tBonds = performance.now() - tBonds0
         bondCount = bonds.count
 
-        // Spheres shrink when sticks are present (ball-and-stick look).
-        const sphere = createSpherePass(built, { scale: 0.28 })
-        s.scene.add(sphere.mesh)
-        s.spherePass = sphere
+        if (wantBallStick) {
+          // Spheres shrink when sticks are present (ball-and-stick look).
+          const sphere = createSpherePass(built, { scale: 0.28 })
+          s.scene.add(sphere.mesh)
+          s.spherePass = sphere
 
-        const stick = createStickPass(built, bonds)
-        s.scene.add(stick.mesh)
-        s.stickPass = stick
+          const stick = createStickPass(built, bonds)
+          s.scene.add(stick.mesh)
+          s.stickPass = stick
+        } else {
+          // Cartoon: render
+          //   - sidechain atoms whose residue contains a charged atom
+          //     (Asp/Glu carboxylates, Lys/Arg amines, His imidazoles),
+          //     so salt-bridge arcs have visible endpoints
+          //   - all atoms in ligand chains (HEM, ATP, Zn, …), at full
+          //     detail — ligands are usually the conceptual centerpiece
+          // Backbone atoms suppressed (the ribbon carries them).
+          const flags = built.attrs.flags
+          const residueIdx = built.attrs.residueIndex
+          const chainIdx = built.attrs.chainIndex
+          const isLigandChain = new Uint8Array(built.chains.length)
+          for (let c = 0; c < built.chains.length; c++) {
+            if (built.chains[c].entityType === 'ligand') isLigandChain[c] = 1
+          }
+          const chargedResidues = new Set<number>()
+          for (let i = 0; i < built.attrs.count; i++) {
+            if (flags[i] & (AtomFlag.PositiveCharge | AtomFlag.NegativeCharge)) {
+              chargedResidues.add(residueIdx[i])
+            }
+          }
+          const isBackbone = (i: number) => (flags[i] & AtomFlag.Backbone) !== 0
+          const isLigand = (i: number) => isLigandChain[chainIdx[i]] === 1
+          const atomFilter = (i: number) =>
+            isLigand(i)
+            || (chargedResidues.has(residueIdx[i]) && !isBackbone(i))
+          // For bonds: keep if either endpoint is in a ligand (full ligand
+          // detail), or if at least one endpoint is in a charged residue
+          // and the bond isn't a backbone-only edge.
+          const bondFilter = (a: number, b: number) =>
+            isLigand(a) || isLigand(b)
+            || ((chargedResidues.has(residueIdx[a]) || chargedResidues.has(residueIdx[b]))
+                && !(isBackbone(a) && isBackbone(b)))
+
+          const sphere = createSpherePass(built, { scale: 0.25, atomFilter })
+          s.scene.add(sphere.mesh)
+          s.spherePass = sphere
+
+          const stick = createStickPass(built, bonds, { bondFilter })
+          s.scene.add(stick.mesh)
+          s.stickPass = stick
+        }
       }
 
       if (wantCartoon) {
@@ -324,6 +400,26 @@ export function MoleroViewer({
           s.scene.add(nucleic.mesh)
           s.nucleicBasePass = nucleic
         }
+
+        // Salt bridges — curved emissive arcs between oppositely-charged
+        // sidechain atoms, intensity scales with charge strength. Lights
+        // up the ionic interaction lattice. Salt bridges are sparse
+        // enough (~30 per 150-residue protein) that whole-structure
+        // display reads cleanly.
+        const bridges = computeSaltBridges(built.attrs, built.bbox)
+        saltBridgeCount = bridges.length
+        if (bridges.length > 0) {
+          const saltPass = createSaltBridgePass(built, bridges)
+          s.scene.add(saltPass.group)
+          s.saltBridgePass = saltPass
+        }
+
+        // Hydrogen bonds are *not* mounted here — at ~one bond per
+        // residue, the whole-structure lattice is visually overwhelming.
+        // The detection pipeline + golden-arc pass are kept for the
+        // upcoming proximity-selection mode: click a residue, surface
+        // the H-bonds in its local neighborhood (a la Mol*'s "show
+        // contacts of selection").
       }
 
       let tGlass = 0
@@ -351,15 +447,15 @@ export function MoleroViewer({
       s.controls.update()
 
       console.log(
-        '[Molero] %d atoms / %d residues / %d chains (parse %sms) / %d bonds (%sms) / %s%s / rep=%s',
+        '[Molero] %d atoms / %d residues / %d chains (parse %sms) / %d bonds (%sms) / %d salt bridges / %s / rep=%s',
         built.attrs.count,
         built.residues.length,
         built.chains.length,
         tParse.toFixed(1),
         bondCount,
         tBonds.toFixed(1),
+        saltBridgeCount,
         wantGlass ? `${surfaceVerts} surf verts (${tGlass.toFixed(0)}ms)` : 'no glass',
-        '',
         representation,
       )
     } catch (e) {
