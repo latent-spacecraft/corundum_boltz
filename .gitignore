@@ -14,3 +14,8 @@ coverage
 *.bak
 __pycache__/
 *.pyc
+
+# Molero lives at packages/molero/ as its own git repo (no remote yet).
+# It is consumed by @corundum/boltz via the npm workspace at packages/*.
+# When a remote is set, swap this exclusion for a proper `git submodule add`.
+packages/molero/

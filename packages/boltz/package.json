@@ -19,6 +19,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "comlink": "^4.4.2",
+    "molero": "*",
     "molstar": "^5.9.0",
     "onnxruntime-web": "^1.26.0",
     "radix-ui": "^1.4.3",

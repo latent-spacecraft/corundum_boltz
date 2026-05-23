@@ -19,8 +19,12 @@ import { create } from 'zustand'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import type { StructurePayload } from './MolViewer'
-import { MoleroViewer, type MoleroRepresentation } from '@/molero/MoleroViewer'
-import { BUNDLED_GLASS_PRESET, type GlassPreset } from '@/molero/glass-preset'
+import {
+  MoleroViewer,
+  type MoleroRepresentation,
+  BUNDLED_GLASS_PRESET,
+  type GlassPreset,
+} from 'molero'
 import { useModelSession } from '@/hooks/useModelSession'
 import { formatBytes } from '@/engine/fetcher'
 import {

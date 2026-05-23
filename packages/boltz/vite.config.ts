@@ -22,14 +22,16 @@ function jewelryPresetSavePlugin(): Plugin {
 
 /**
  * Dev-only endpoint: POST /__save_glass_preset writes to
- * src/molero/glass-preset.json. The Molero glass settings panel uses
- * this to persist the user's tuned surface + material params.
+ * ../molero/src/glass-preset.json — the bundled preset that lives
+ * inside the standalone Molero package (consumed here as a workspace
+ * dep). Hot-edits to that file flow back into the running session via
+ * Vite's watch graph.
  */
 function glassPresetSavePlugin(): Plugin {
   return makePresetSavePlugin(
     'corundum-glass-preset-save',
     '/__save_glass_preset',
-    'src/molero/glass-preset.json',
+    '../molero/src/glass-preset.json',
     'glass-preset',
   )
 }
