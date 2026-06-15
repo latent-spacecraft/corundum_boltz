@@ -23,8 +23,6 @@
  */
 import { BoltzCanvas, BoltzInput } from './acts/boltz/BoltzAct'
 import { LigandDrawer } from './acts/boltz/LigandDrawer'
-import { WebGpuDebug } from './debug/WebGpuDebug'
-import { MemoryProbe } from './debug/MemoryProbe'
 import { GemLogo } from './components/GemLogo'
 
 export function App() {
@@ -74,12 +72,6 @@ export function App() {
       </main>
 
       <LigandDrawer />
-      {import.meta.env.DEV && (
-        <>
-          <MemoryProbe />
-          <WebGpuDebug />
-        </>
-      )}
     </div>
   )
 }

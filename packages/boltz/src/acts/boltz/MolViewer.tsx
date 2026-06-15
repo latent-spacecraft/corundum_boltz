@@ -306,8 +306,8 @@ function Toolbar({
         type="button"
         onClick={onResetCamera}
         disabled={disabled}
-        className="border px-2 py-1 text-xs"
-        style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+        className="border px-2 py-1 text-xs transition-colors"
+        style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
         title="Reset camera"
       >
         Reset view
@@ -316,8 +316,8 @@ function Toolbar({
         type="button"
         onClick={onScreenshot}
         disabled={disabled}
-        className="border px-2 py-1 text-xs"
-        style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+        className="border px-2 py-1 text-xs transition-colors"
+        style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
         title="Download PNG"
       >
         Save PNG

@@ -37,7 +37,6 @@ import { useModelSession } from '@/hooks/useModelSession'
 import { formatBytes } from '@/engine/fetcher'
 import { detectDevice, type DeviceCapabilities } from '@/engine/device'
 import { estimateMemory, type MemoryEstimate } from '@/engine/memory'
-import { recordPhase as recordMemoryPhase } from '@/engine/memoryProbe'
 import {
   boltzBundle,
   bundleApproxBytes,
@@ -130,36 +129,6 @@ function phaseLabel(e: ProgressEvent | null): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Slots
-
-
-const EXAMPLE_1L2Y = `>1L2Y Trp-cage miniprotein (20 aa)
-NLYIQWLKDGGPSSGRPPPS`
-const EXAMPLE_1CRN = `>1CRN Crambin (46 aa)
-TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN`
-const EXAMPLE_1UBQ = `>1UBQ Ubiquitin (76 aa)
-MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG`
-const EXAMPLE_DIMER = `>chain_a 1L2Y copy A
-NLYIQWLKDGGPSSGRPPPS
->chain_b 1L2Y copy B
-NLYIQWLKDGGPSSGRPPPS`
-// Classic UUCG tetraloop — a 10-nt RNA hairpin that folds reliably.
-const EXAMPLE_RNA = `>uucg_loop rna
-CGCUUCGGCG`
-// Drew–Dickerson dodecamer: self-complementary B-form DNA duplex.
-const EXAMPLE_DNA = `>strand_a dna
-CGCGAATTCGCG
->strand_b dna
-CGCGAATTCGCG`
-// Crambin (1CRN) + a heme cofactor — exercises the ligand cofolding path.
-// Crambin doesn't actually bind heme biologically; this is a featurization
-// smoke test, not a biology claim.
-const EXAMPLE_PROT_LIG = `>1CRN Crambin
-TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN
->heme ligand
-HEM`
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Tiny presentational helpers used across the input pane sections.
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -177,20 +146,18 @@ function ChipButton({
   onClick,
   title,
   children,
-  flex = false,
 }: {
   onClick: () => void
   title?: string
   children: React.ReactNode
-  flex?: boolean
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={`border px-2 py-1 text-xs transition-colors ${flex ? 'flex-1 min-w-[5em]' : ''}`}
-      style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+      className="border px-2 py-1 text-xs transition-colors"
+      style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
     >
       {children}
     </button>
@@ -198,17 +165,7 @@ function ChipButton({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sequences input — FASTA textarea, chain preview, example shortcuts, file open.
-
-const EXAMPLES = [
-  { label: '1L2Y · 20 aa', fasta: EXAMPLE_1L2Y, title: 'Trp-cage miniprotein — smallest validated target' },
-  { label: '1CRN · 46 aa', fasta: EXAMPLE_1CRN, title: 'Crambin — plant protein, three disulfides' },
-  { label: '1UBQ · 76 aa', fasta: EXAMPLE_1UBQ, title: 'Ubiquitin — classic fold benchmark' },
-  { label: 'Dimer · 2×20', fasta: EXAMPLE_DIMER, title: '1L2Y homodimer' },
-  { label: 'RNA · 10 nt', fasta: EXAMPLE_RNA, title: 'UUCG tetraloop — RNA hairpin' },
-  { label: 'DNA · 2×12', fasta: EXAMPLE_DNA, title: 'Drew–Dickerson dodecamer — B-form DNA duplex' },
-  { label: 'Prot + HEM', fasta: EXAMPLE_PROT_LIG, title: 'Crambin + heme cofactor — ligand cofolding test' },
-] as const
+// Sequences input — FASTA textarea, chain preview, file open.
 
 function SequencesSection({
   fasta,
@@ -272,16 +229,9 @@ function SequencesSection({
           </>
         )}
       </p>
-      <div className="flex flex-wrap gap-1">
-        {EXAMPLES.map((ex) => (
-          <ChipButton key={ex.label} onClick={() => setFasta(ex.fasta)} title={ex.title} flex>
-            {ex.label}
-          </ChipButton>
-        ))}
-      </div>
       <label
         className="cursor-pointer border px-3 py-1.5 text-center text-xs transition-colors"
-        style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+        style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
       >
         Open .pdb / .mmCIF file…
         <input
@@ -407,10 +357,10 @@ function LigandsSection({
       <button
         type="button"
         onClick={() => openDrawer(true)}
-        className="self-start text-xs underline-offset-2 hover:underline transition-colors"
-        style={{ color: 'var(--ink-faded)' }}
+        className="self-start text-xs underline underline-offset-2 transition-colors"
+        style={{ color: 'var(--oxblood)' }}
       >
-        Browse cofactor library…
+        Browse cofactor library →
       </button>
     </section>
   )
@@ -485,17 +435,6 @@ function RunRail({
   const confidence = useModelSession(bundle.confidence)
   const { setStructure, setStreamingFrame, setStreaming, setError, error } = useBoltz()
 
-  // Memory probes on session ready (instrumentation for the dev probe).
-  useEffect(() => {
-    if (trunk.status === 'ready') void recordMemoryPhase('engine.trunk.ready')
-  }, [trunk.status])
-  useEffect(() => {
-    if (diffusion.status === 'ready') void recordMemoryPhase('engine.diffusion.ready')
-  }, [diffusion.status])
-  useEffect(() => {
-    if (confidence.status === 'ready') void recordMemoryPhase('engine.confidence.ready')
-  }, [confidence.status])
-
   const allReady =
     trunk.status === 'ready' && diffusion.status === 'ready' && confidence.status === 'ready'
   const anyLoading =
@@ -527,7 +466,6 @@ function RunRail({
     setError(null)
     setProgress(null)
     try {
-      await recordMemoryPhase('predict.start')
       const withBlobs = await Promise.all(
         chains.map(async (c) => {
           if (c.type !== 'ligand') return c
@@ -536,7 +474,6 @@ function RunRail({
         }),
       )
       const feats = featurizeChains(withBlobs)
-      await recordMemoryPhase('predict.featurized')
 
       setStreaming(true)
       const labelBase = withBlobs[0]?.name ? withBlobs[0].name.slice(0, 24) : 'unnamed'
@@ -556,16 +493,6 @@ function RunRail({
         seed: 42,
         onProgress: (e) => {
           setProgress(e)
-          const milestone =
-            e.phase === 'sampling' &&
-            e.step !== undefined &&
-            e.total !== undefined &&
-            (e.step === 1 || e.step % 10 === 0 || e.step === e.total)
-          if (e.phase === 'recycling' || e.phase === 'confidence' || milestone) {
-            const lbl =
-              e.phase === 'sampling' ? `predict.sampling.${e.step}` : `predict.${e.phase}`
-            void recordMemoryPhase(lbl)
-          }
         },
         onStep: (denoised, step, total) => {
           if (step % STREAM_EVERY !== 0 && step !== total) return
@@ -589,7 +516,6 @@ function RunRail({
           }
         },
       })
-      await recordMemoryPhase('predict.done')
       const cif = writeMmcif({
         feats,
         atomCoords: result.atomCoords,
