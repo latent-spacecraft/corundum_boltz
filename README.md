@@ -2,6 +2,9 @@
 
 > Browser-native AI inference for the life sciences. No install, no compute account, no data egress.
 
+**Instant use with web portal: [Corundum.app](https://corundum.app/)**
+
+
 Corundum is a monorepo of standalone web apps that run AI models entirely in your browser tab. Weights download once, cache in OPFS, and execute on your own GPU via WebGPU (with a threaded-WASM fallback). The work you do never leaves the device.
 
 ## Packages
