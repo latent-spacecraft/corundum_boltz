@@ -27,7 +27,12 @@ export async function getRuntime(opts: RuntimeOptions = {}) {
   if (configured) return ort
 
   const env = ort.env as unknown as {
-    wasm: { numThreads: number; simd: boolean; proxy?: boolean }
+    wasm: {
+      numThreads: number
+      simd: boolean
+      proxy?: boolean
+      wasmPaths?: string | Record<string, string>
+    }
     logLevel?: string
   }
 
@@ -36,6 +41,15 @@ export async function getRuntime(opts: RuntimeOptions = {}) {
   }
   env.wasm.simd = true
   env.logLevel = 'warning'
+
+  // Cloudflare Pages caps individual deployed assets at 25 MiB; the
+  // ort-wasm-simd-threaded.jsep binary is 26 MiB and would block upload.
+  // Loading it from jsDelivr keeps the deployed bundle slim and works
+  // under our COEP:credentialless policy (no credentials on cross-origin
+  // fetch). Pin the major.minor to onnxruntime-web's installed version so
+  // a registry surprise can't break the runtime.
+  env.wasm.wasmPaths =
+    'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0/dist/'
 
   configured = true
   return ort

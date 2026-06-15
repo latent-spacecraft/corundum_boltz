@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && rm -f dist/assets/*.wasm",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "smoke:featurizer": "tsx scripts/smoke_featurizer.ts",
