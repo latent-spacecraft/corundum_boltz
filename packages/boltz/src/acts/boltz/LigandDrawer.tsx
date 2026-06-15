@@ -46,6 +46,18 @@ export const useLigandInsertSlot = create<FastaInsertSlot>((set) => ({
   setInsert: (fn) => set({ insert: fn }),
 }))
 
+// Open state for the cofactor picker — exposed as a zustand store so the
+// "Browse cofactor library…" link in the input pane can open it from
+// elsewhere in the tree.
+interface DrawerOpenState {
+  open: boolean
+  setOpen: (open: boolean) => void
+}
+export const useLigandDrawer = create<DrawerOpenState>((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}))
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CPK-ish coloring + radii for inline thumbnails. Only the elements we
 // actually ship in the starter pack are enumerated; everything else falls
@@ -215,8 +227,19 @@ export function LigandDrawer() {
   const [index, setIndex] = useState<LigandIndex | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(false)
+  const open = useLigandDrawer((s) => s.open)
+  const setOpen = useLigandDrawer((s) => s.setOpen)
   const insert = useLigandInsertSlot((s) => s.insert)
+
+  // ESC closes; click on backdrop closes.
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, setOpen])
 
   // Load the index once, when the drawer is first opened. Cheap (~4 KB) but
   // no point fetching it before the user looks.
@@ -248,30 +271,63 @@ export function LigandDrawer() {
 
   const handleClick = (ccd: string) => {
     if (insert) insert(ccd)
+    setOpen(false)
   }
 
+  if (!open) return null
+
   return (
-    <details
-      className="border-t"
-      style={{ borderColor: 'var(--rule)', background: 'var(--card)' }}
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Cofactor library"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false)
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(20, 20, 20, 0.35)',
+        zIndex: 50,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '4rem',
+      }}
     >
-      <summary
-        className="flex cursor-pointer select-none items-center justify-between px-6 py-2 font-mono text-[10px] uppercase tracking-widest"
-        style={{ color: 'var(--ink-faded)' }}
+      <div
+        className="flex max-h-full max-w-3xl flex-col overflow-hidden border"
+        style={{ borderColor: 'var(--rule)', background: 'var(--card)' }}
       >
-        <span>Ligand library</span>
-        {index && (
-          <span>
-            {filtered.length}
-            {filtered.length !== index.entries.length && (
-              <span style={{ color: 'var(--ink-faded)' }}> / {index.entries.length}</span>
-            )}
-            {' shown'}
+        <div
+          className="flex shrink-0 items-center justify-between border-b px-5 py-3"
+          style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+        >
+          <span className="text-sm font-medium" style={{ color: 'var(--ink)' }}>
+            Cofactor library
           </span>
-        )}
-      </summary>
-      <div className="px-6 py-4">
+          <div className="flex items-center gap-4 text-xs">
+            {index && (
+              <span>
+                {filtered.length}
+                {filtered.length !== index.entries.length && (
+                  <span style={{ color: 'var(--ink-faded)' }}> / {index.entries.length}</span>
+                )}
+                {' shown'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close cofactor library"
+              className="text-lg leading-none"
+              style={{ color: 'var(--ink)' }}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+        <div className="overflow-auto px-5 py-4">
         {error && (
           <p className="font-mono text-xs" style={{ color: 'var(--destructive)' }}>
             Failed to load /ccd/index.json: {error}
@@ -311,16 +367,20 @@ export function LigandDrawer() {
                 <LigandThumbnail ccd={e.ccd} />
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span
-                    className="truncate font-mono text-xs"
+                    className="truncate text-xs"
                     style={{ color: 'var(--foreground)' }}
                   >
                     {e.name}
                   </span>
                   <span
-                    className="font-mono text-[10px] uppercase tracking-widest"
+                    className="text-[10px]"
                     style={{ color: 'var(--ink-faded)' }}
                   >
-                    {e.ccd} · {e.formula} · {e.n_atoms} atoms
+                    <span className="font-mono uppercase tracking-wide">{e.ccd}</span>
+                    {' · '}
+                    {e.formula}
+                    {' · '}
+                    {e.n_atoms} atoms
                   </span>
                 </div>
               </button>
@@ -335,7 +395,8 @@ export function LigandDrawer() {
             )}
           </div>
         )}
+        </div>
       </div>
-    </details>
+    </div>
   )
 }

@@ -16,7 +16,7 @@
  * Slice 3 = orchestration loops).
  */
 import { create } from 'zustand'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { MolViewer, type StructurePayload } from './MolViewer'
 import {
@@ -51,7 +51,7 @@ import { writeMmcif } from './mmcif'
 import { validateAgainstGolden, type ValidationReport } from './featurizer/validate'
 import { featurizeChains, parseFasta, type ParsedChain } from './featurizer'
 import { loadLigandBlob, type LigandBlob } from './featurizer/ligand'
-import { useLigandInsertSlot } from './LigandDrawer'
+import { useLigandInsertSlot, useLigandDrawer } from './LigandDrawer'
 
 interface BoltzActState {
   structure: StructurePayload | null
@@ -118,472 +118,20 @@ function detectFormat(name: string, content: string): 'pdb' | 'mmcif' {
 // ─────────────────────────────────────────────────────────────────────────────
 // Bundled example — Crambin (PDB 1CRN), 46-residue plant protein.
 
-const CRAMBIN_PDB_URL = 'https://files.rcsb.org/download/1CRN.pdb'
-
-async function fetchExample(): Promise<StructurePayload> {
-  const res = await fetch(CRAMBIN_PDB_URL)
-  if (!res.ok) throw new Error(`Failed to fetch 1CRN: HTTP ${res.status}`)
-  const data = await res.text()
-  return { data, format: 'pdb', id: '1CRN' }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Engine loader sub-panel
-//
-// Three useModelSession hooks (one per graph) are created at the component
-// level and keyed by precision via a parent `key` prop so a precision change
-// cleanly disposes the previous trio and remounts with fresh manifests.
+// Predict-pipeline helpers
 
-function GraphProgressBar({
-  label,
-  status,
-  progress,
-  totalBytes,
-}: {
-  label: string
-  status: ReturnType<typeof useModelSession>['status']
-  progress: ReturnType<typeof useModelSession>['progress']
-  totalBytes: number
-}) {
-  const loaded = progress?.bytesLoaded ?? 0
-  const total = progress?.bytesTotal ?? totalBytes
-  const pct = total > 0 ? Math.min(100, (loaded / total) * 100) : 0
-  const ready = status === 'ready'
-  const rate = progress?.bytesPerSecond
-    ? ` · ${formatBytes(progress.bytesPerSecond)}/s`
-    : ''
-  return (
-    <div className="flex flex-col gap-1">
-      <div
-        className="flex items-center justify-between font-mono text-[10px] uppercase tracking-widest"
-        style={{ color: 'var(--ink-faded)' }}
-      >
-        <span>{label}</span>
-        <span>
-          {ready
-            ? 'ready'
-            : status === 'compiling'
-              ? 'compiling…'
-              : status === 'fetching'
-                ? `${formatBytes(loaded)} / ${formatBytes(total)}${rate}`
-                : status === 'error'
-                  ? 'error'
-                  : 'idle'}
-        </span>
-      </div>
-      <div className="h-1 w-full" style={{ background: 'var(--paper-mottle)' }}>
-        <div
-          className="h-1 transition-[width] duration-150"
-          style={{
-            width: `${ready ? 100 : pct}%`,
-            background: ready
-              ? 'var(--oxblood)'
-              : status === 'error'
-                ? 'var(--destructive)'
-                : 'var(--brass)',
-          }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function EngineLoaderFor({ precision }: { precision: BoltzPrecision }) {
-  const bundle = boltzBundle(precision)
-  const trunk = useModelSession(bundle.trunk)
-  const diffusion = useModelSession(bundle.diffusion_step)
-  const confidence = useModelSession(bundle.confidence)
-
-  // Memory probes when each session goes ready. These fire once per
-  // session lifecycle thanks to the status comparison.
-  useEffect(() => {
-    if (trunk.status === 'ready') void recordMemoryPhase('engine.trunk.ready')
-  }, [trunk.status])
-  useEffect(() => {
-    if (diffusion.status === 'ready') void recordMemoryPhase('engine.diffusion.ready')
-  }, [diffusion.status])
-  useEffect(() => {
-    if (confidence.status === 'ready') void recordMemoryPhase('engine.confidence.ready')
-  }, [confidence.status])
-
-  const allIdle =
-    trunk.status === 'idle' &&
-    diffusion.status === 'idle' &&
-    confidence.status === 'idle'
-  const anyInFlight =
-    trunk.status === 'fetching' ||
-    trunk.status === 'compiling' ||
-    diffusion.status === 'fetching' ||
-    diffusion.status === 'compiling' ||
-    confidence.status === 'fetching' ||
-    confidence.status === 'compiling'
-  const allReady =
-    trunk.status === 'ready' &&
-    diffusion.status === 'ready' &&
-    confidence.status === 'ready'
-  const anyError =
-    trunk.status === 'error' ||
-    diffusion.status === 'error' ||
-    confidence.status === 'error'
-
-  const total = bundleApproxBytes(precision)
-
-  return (
-    <div className="flex flex-col gap-3">
-      {allIdle && (
-        <Button
-          variant="outline"
-          onClick={() => {
-            void trunk.load()
-            void diffusion.load()
-            void confidence.load()
-          }}
-        >
-          Load engine ({formatBytes(total)})
-        </Button>
-      )}
-
-      {(anyInFlight || allReady || anyError) && (
-        <div
-          className="flex flex-col gap-2 border p-3"
-          style={{
-            borderColor: 'var(--rule)',
-            background: 'var(--paper-mottle)',
-          }}
-        >
-          <GraphProgressBar
-            label="Trunk"
-            status={trunk.status}
-            progress={trunk.progress}
-            totalBytes={bundle.trunk.approxBytes + (bundle.trunk.externalDataApproxBytes ?? 0)}
-          />
-          <GraphProgressBar
-            label="Diffusion step"
-            status={diffusion.status}
-            progress={diffusion.progress}
-            totalBytes={
-              bundle.diffusion_step.approxBytes +
-              (bundle.diffusion_step.externalDataApproxBytes ?? 0)
-            }
-          />
-          <GraphProgressBar
-            label="Confidence"
-            status={confidence.status}
-            progress={confidence.progress}
-            totalBytes={
-              bundle.confidence.approxBytes +
-              (bundle.confidence.externalDataApproxBytes ?? 0)
-            }
-          />
-        </div>
-      )}
-
-      {allReady && (
-        <PredictPanel trunk={trunk.handle!} diffusion={diffusion.handle!} confidence={confidence.handle!} />
-      )}
-
-      {anyError && (
-        <p
-          className="font-mono text-[10px] uppercase tracking-widest leading-relaxed"
-          style={{ color: 'var(--destructive)' }}
-        >
-          {trunk.error ?? diffusion.error ?? confidence.error}
-        </p>
-      )}
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Prediction sub-panel — fires the orchestration loop using the live
-// featurizer on whatever sequence is in the FASTA textarea. Visible only
-// when the three sessions are ready at fp32 precision.
-
-function PredictPanel({
-  trunk,
-  diffusion,
-  confidence,
-}: {
-  trunk: NonNullable<ReturnType<typeof useModelSession>['handle']>
-  diffusion: NonNullable<ReturnType<typeof useModelSession>['handle']>
-  confidence: NonNullable<ReturnType<typeof useModelSession>['handle']>
-}) {
-  const { fasta, setStructure, setStreamingFrame, setStreaming, setError } = useBoltz()
-  const [running, setRunning] = useState(false)
-  const [progress, setProgress] = useState<ProgressEvent | null>(null)
-  const [stats, setStats] = useState<{
-    plddtMean: number
-    plddtMin: number
-    plddtMax: number
-    elapsedMs: number
-    residueCount: number
-  } | null>(null)
-
-  // Parse the FASTA on render so we can preflight length and disable the button.
-  // Wrapping in try/catch keeps the panel responsive while the user is mid-edit
-  // (the parser throws on empty body / empty header which is fine at submit time
-  // but noisy during typing).
-  let chains: ParsedChain[] = []
-  let parseError: string | null = null
-  try {
-    chains = parseFasta(fasta)
-  } catch (e) {
-    parseError = (e as Error).message
-  }
-  const cleaned = chains.map((c) => ({
-    ...c,
-    sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase(),
-  }))
-  // For totalLen / tooShort / tooLong: polymer residues count as 1 unit each;
-  // a ligand chain only contributes its CCD label, but the trunk runs token-
-  // per-atom so the *real* token cost of a ligand is its atom count, which we
-  // only know after fetching the blob. For preflight purposes we conservatively
-  // count one ligand token-equivalent per ligand chain; the limit check is
-  // re-asserted on the real `feats.N` once the blob is loaded.
-  const totalLen = cleaned.reduce((acc, c) => {
-    if (c.type === 'ligand') return acc + 1
-    return acc + c.sequence.length
-  }, 0)
-  const polymerLen = cleaned
-    .filter((c) => c.type !== 'ligand')
-    .reduce((acc, c) => acc + c.sequence.length, 0)
-  const chainSummary = cleaned.length === 0
-    ? '(empty)'
-    : cleaned
-        .map((c) =>
-          c.type === 'ligand'
-            ? `${c.name || c.sequence} (ligand)`
-            : `${c.name || '(no header)'} · ${c.sequence.length}`,
-        )
-        .join('  +  ')
-  // Length budget applies to polymer residues only (ligands are tiny relative
-  // to the 1024-residue trunk budget — a typical cofactor adds ~30-50 atom-
-  // tokens, well under the polymer cap).
-  const tooShort = polymerLen < 8
-  const tooLong = polymerLen > 1024
-  void totalLen
-
-  const phaseLabel = (e: ProgressEvent | null) => {
-    if (!e) return 'Initialising…'
-    if (e.phase === 'recycling') return `Recycling ${e.step + 1}/${e.total}`
-    if (e.phase === 'sampling') return `Sampling ${e.step}/${e.total}  σ ${e.sigma.toFixed(2)}`
-    if (e.phase === 'confidence') return 'Confidence head…'
-    return 'Done'
-  }
-
-  return (
-    <div
-      className="flex flex-col gap-2 border p-3"
-      style={{ borderColor: 'var(--oxblood)' }}
-    >
-      <p
-        className="font-mono text-[10px] uppercase tracking-widest leading-relaxed"
-        style={{ color: 'var(--oxblood)' }}
-      >
-        Engine warm · {trunk.executionProvider}.
-      </p>
-      <div
-        className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-widest"
-        style={{ color: 'var(--ink-faded)' }}
-      >
-        <span title={chainSummary} className="truncate">
-          {parseError
-            ? <span style={{ color: 'var(--destructive)' }}>{parseError}</span>
-            : chainSummary}
-        </span>
-        <span className="whitespace-nowrap">
-          {cleaned.length > 1 && <span>{cleaned.length} chains · </span>}
-          {polymerLen} res
-          {tooShort && polymerLen > 0 && (
-            <span style={{ color: 'var(--destructive)' }}> · &lt;8</span>
-          )}
-          {tooLong && (
-            <span style={{ color: 'var(--destructive)' }}> · &gt;1024</span>
-          )}
-        </span>
-      </div>
-      <Button
-        variant="outline"
-        disabled={running || tooShort || tooLong || parseError !== null}
-        onClick={async () => {
-          setRunning(true)
-          setError(null)
-          setStats(null)
-          setProgress(null)
-          try {
-            await recordMemoryPhase('predict.start')
-            // Resolve ligand blobs from /ccd/<CODE>.json before featurizing.
-            // Polymer chains pass through unchanged.
-            const withBlobs = await Promise.all(
-              cleaned.map(async (c) => {
-                if (c.type !== 'ligand') return c
-                const blob: LigandBlob = await loadLigandBlob(c.sequence)
-                return { ...c, blob }
-              }),
-            )
-            const feats = featurizeChains(withBlobs)
-            await recordMemoryPhase('predict.featurized')
-
-            // Streaming setup: throttle per-step frames to ~1 in every 3
-            // diffusion steps so the canvas rebuild (wire + side-chains +
-            // ligand reps) overlaps with the next ONNX call. The shell
-            // stays hidden during streaming; pLDDT isn't known yet so we
-            // pass a flat 50.0 placeholder — wire thickness reads as
-            // uniform metal until the confidence head runs.
-            setStreaming(true)
-            const labelBaseStream = withBlobs[0]?.name
-              ? withBlobs[0].name.slice(0, 24)
-              : 'unnamed'
-            const labelStream = withBlobs.length > 1
-              ? `${labelBaseStream}+${withBlobs.length - 1}`
-              : labelBaseStream
-            const placeholderPlddt = new Float32Array(feats.N).fill(50)
-            const STREAM_EVERY = 3
-            let inFlight = false  // drop frames if a prior write is still painting
-
-            const result = await predict({
-              feats,
-              trunk,
-              diffusion,
-              confidence,
-              recyclingSteps: 1,
-              samplingSteps: 50,
-              seed: 42,
-              onProgress: (e) => {
-                setProgress(e)
-                // Phase-boundary probes (not every step) — measureUserAgent…
-                // takes ~50-200 ms and would dominate the diffusion loop if
-                // called per step. Recycling fires once; sampling first +
-                // every 10th step; confidence once at entry.
-                const isSamplingMilestone =
-                  e.phase === 'sampling' &&
-                  e.step !== undefined &&
-                  e.total !== undefined &&
-                  (e.step === 1 || e.step % 10 === 0 || e.step === e.total)
-                if (
-                  e.phase === 'recycling' ||
-                  e.phase === 'confidence' ||
-                  isSamplingMilestone
-                ) {
-                  const label =
-                    e.phase === 'sampling'
-                      ? `predict.sampling.${e.step}`
-                      : `predict.${e.phase}`
-                  void recordMemoryPhase(label)
-                }
-              },
-              onStep: (denoised, step, total) => {
-                if (step % STREAM_EVERY !== 0 && step !== total) return
-                if (inFlight) return
-                inFlight = true
-                try {
-                  const cifFrame = writeMmcif({
-                    feats,
-                    atomCoords: denoised,
-                    plddt: placeholderPlddt,
-                    chains: withBlobs,
-                    modelId: `step-${step}`,
-                  })
-                  setStreamingFrame({
-                    data: cifFrame,
-                    format: 'mmcif',
-                    // id ticks each frame so React/MolViewer notice the change
-                    id: `${labelStream} (diffusion ${step}/${total})`,
-                  })
-                } finally {
-                  inFlight = false
-                }
-              },
-            })
-            await recordMemoryPhase('predict.done')
-            const cif = writeMmcif({
-              feats,
-              atomCoords: result.atomCoords,
-              plddt: result.plddt,
-              chains: withBlobs,
-              modelId: 'predicted',
-            })
-            // Diagnostic: log the first 30 lines + tail of the mmCIF so we
-            // can sanity-check the writer output independently of Mol*'s parser.
-            // Also log array types / lengths to catch typed-array surprises.
-            {
-              const head = cif.split('\n').slice(0, 30).join('\n')
-              const tail = cif.split('\n').slice(-5).join('\n')
-              console.log(
-                '[BoltzAct] mmCIF length=%d  atomCoords=%s[%d]  plddt=%s[%d] sample=%o..%o',
-                cif.length,
-                result.atomCoords.constructor.name,
-                result.atomCoords.length,
-                result.plddt.constructor.name,
-                result.plddt.length,
-                Array.from(result.atomCoords.slice(0, 6)),
-                Array.from(result.plddt.slice(0, 4)),
-              )
-              console.log('[BoltzAct] mmCIF head:\n' + head + '\n…\n' + tail)
-            }
-            const labelBase = withBlobs[0]?.name
-              ? withBlobs[0].name.slice(0, 24)
-              : 'unnamed'
-            const label = withBlobs.length > 1
-              ? `${labelBase}+${withBlobs.length - 1}`
-              : labelBase
-            setStructure(
-              { data: cif, format: 'mmcif', id: `${label} (predicted)` },
-              `Boltz-2 prediction · ${cleaned.length} chain${cleaned.length > 1 ? 's' : ''} · ${(result.elapsedMs / 1000).toFixed(1)} s`,
-            )
-            const mean =
-              Array.from(result.plddt).reduce((a, b) => a + b, 0) /
-              result.plddt.length
-            let pMin = result.plddt[0]
-            let pMax = result.plddt[0]
-            for (const v of result.plddt) {
-              if (v < pMin) pMin = v
-              if (v > pMax) pMax = v
-            }
-            setStats({
-              plddtMean: mean,
-              plddtMin: pMin,
-              plddtMax: pMax,
-              elapsedMs: result.elapsedMs,
-              residueCount: feats.N,
-            })
-          } catch (err) {
-            setError((err as Error).message)
-          } finally {
-            setRunning(false)
-            // Defensive: setStructure on the success path already clears
-            // streaming, but a mid-run error would leave it stuck on.
-            setStreaming(false)
-          }
-        }}
-      >
-        {running ? phaseLabel(progress) : 'Predict structure'}
-      </Button>
-      {stats && (
-        <div
-          className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          <span>Residues</span>
-          <span style={{ color: 'var(--ink)' }}>{stats.residueCount}</span>
-          <span>pLDDT mean</span>
-          <span style={{ color: 'var(--ink)' }}>{stats.plddtMean.toFixed(1)}</span>
-          <span>pLDDT range</span>
-          <span style={{ color: 'var(--ink)' }}>
-            {stats.plddtMin.toFixed(1)} – {stats.plddtMax.toFixed(1)}
-          </span>
-          <span>Elapsed</span>
-          <span style={{ color: 'var(--ink)' }}>
-            {(stats.elapsedMs / 1000).toFixed(1)} s
-          </span>
-        </div>
-      )}
-    </div>
-  )
+function phaseLabel(e: ProgressEvent | null): string {
+  if (!e) return 'Initialising…'
+  if (e.phase === 'recycling') return `Recycling ${(e.step ?? 0) + 1}/${e.total ?? 1}`
+  if (e.phase === 'sampling') return `Folding ${e.step}/${e.total}`
+  if (e.phase === 'confidence') return 'Scoring confidence…'
+  return 'Done'
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Slots
+
 
 const EXAMPLE_1L2Y = `>1L2Y Trp-cage miniprotein (20 aa)
 NLYIQWLKDGGPSSGRPPPS`
@@ -611,544 +159,718 @@ TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN
 >heme ligand
 HEM`
 
-function validateUniProtAccession(accession: string): string {
-  const acc = accession.trim().toUpperCase()
-  if (!acc) throw new Error('Enter a UniProt accession (e.g. P02768)')
-  if (!/^[A-Z][A-Z0-9]{5,9}$/.test(acc)) {
-    throw new Error(`'${acc}' doesn't look like a UniProt accession`)
-  }
-  return acc
+// ─────────────────────────────────────────────────────────────────────────────
+// Tiny presentational helpers used across the input pane sections.
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label
+      className="text-xs font-medium"
+      style={{ color: 'var(--ink)' }}
+    >
+      {children}
+    </label>
+  )
 }
 
-/**
- * Fetch the AlphaFold-DB precomputed structure for a UniProt accession.
- *
- * AlphaFoldDB hosts structures at a stable URL template; for proteins ≤ 2700
- * residues the `-F1` fragment is the only model and `model_v4` is the
- * current (2024+) database version. mmCIF carries per-residue pLDDT in the
- * B-factor column — Mol* already paints that, and Molero Phase 2's emission
- * channel will read it directly.
- *
- * No Boltz inference required — this is the fast "show me what AlphaFold
- * predicted" path. Useful both as a viewer testbed and as a baseline for
- * comparing Boltz predictions against AlphaFold's.
- */
-async function fetchAlphaFold(accession: string): Promise<StructurePayload> {
-  const acc = validateUniProtAccession(accession)
-  const url = `https://alphafold.ebi.ac.uk/files/AF-${acc}-F1-model_v4.cif`
-  const res = await fetch(url)
-  if (!res.ok) {
-    if (res.status === 404) {
-      throw new Error(
-        `AlphaFoldDB has no structure for ${acc} ` +
-        `(not yet predicted, or > 2700 residues — multi-fragment models aren't supported yet)`,
+function ChipButton({
+  onClick,
+  title,
+  children,
+  flex = false,
+}: {
+  onClick: () => void
+  title?: string
+  children: React.ReactNode
+  flex?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`border px-2 py-1 text-xs transition-colors ${flex ? 'flex-1 min-w-[5em]' : ''}`}
+      style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sequences input — FASTA textarea, chain preview, example shortcuts, file open.
+
+const EXAMPLES = [
+  { label: '1L2Y · 20 aa', fasta: EXAMPLE_1L2Y, title: 'Trp-cage miniprotein — smallest validated target' },
+  { label: '1CRN · 46 aa', fasta: EXAMPLE_1CRN, title: 'Crambin — plant protein, three disulfides' },
+  { label: '1UBQ · 76 aa', fasta: EXAMPLE_1UBQ, title: 'Ubiquitin — classic fold benchmark' },
+  { label: 'Dimer · 2×20', fasta: EXAMPLE_DIMER, title: '1L2Y homodimer' },
+  { label: 'RNA · 10 nt', fasta: EXAMPLE_RNA, title: 'UUCG tetraloop — RNA hairpin' },
+  { label: 'DNA · 2×12', fasta: EXAMPLE_DNA, title: 'Drew–Dickerson dodecamer — B-form DNA duplex' },
+  { label: 'Prot + HEM', fasta: EXAMPLE_PROT_LIG, title: 'Crambin + heme cofactor — ligand cofolding test' },
+] as const
+
+function SequencesSection({
+  fasta,
+  setFasta,
+  parseError,
+  polymerChainCount,
+  ligandChainCount,
+  polymerLen,
+  tooShort,
+  tooLong,
+  onLoadFile,
+}: {
+  fasta: string
+  setFasta: (s: string) => void
+  parseError: string | null
+  polymerChainCount: number
+  ligandChainCount: number
+  polymerLen: number
+  tooShort: boolean
+  tooLong: boolean
+  onLoadFile: (payload: StructurePayload, source: string) => void
+}) {
+  const totalChains = polymerChainCount + ligandChainCount
+  return (
+    <section className="flex flex-col gap-2">
+      <SectionLabel>Sequences</SectionLabel>
+      <textarea
+        value={fasta}
+        onChange={(e) => setFasta(e.target.value)}
+        rows={5}
+        spellCheck={false}
+        placeholder={'>my_protein\nMKLLI…'}
+        className="w-full resize-y border p-2 font-mono text-xs leading-relaxed"
+        style={{
+          borderColor: 'var(--rule)',
+          background: 'var(--background)',
+          color: 'var(--ink)',
+        }}
+      />
+      <p
+        className="text-xs leading-snug"
+        style={{ color: 'var(--ink-faded)' }}
+      >
+        {parseError ? (
+          <span style={{ color: 'var(--destructive)' }}>{parseError}</span>
+        ) : totalChains === 0 ? (
+          <span>Paste FASTA, pick an example, or open a structure file.</span>
+        ) : (
+          <>
+            <span style={{ color: 'var(--ink)' }}>
+              {totalChains} chain{totalChains !== 1 ? 's' : ''}
+            </span>
+            {polymerLen > 0 && <> · {polymerLen} residue{polymerLen !== 1 ? 's' : ''}</>}
+            {ligandChainCount > 0 && <> · {ligandChainCount} ligand{ligandChainCount !== 1 ? 's' : ''}</>}
+            {tooShort && (
+              <span style={{ color: 'var(--destructive)' }}> · under 8 minimum</span>
+            )}
+            {tooLong && (
+              <span style={{ color: 'var(--destructive)' }}> · over 1024 maximum</span>
+            )}
+          </>
+        )}
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {EXAMPLES.map((ex) => (
+          <ChipButton key={ex.label} onClick={() => setFasta(ex.fasta)} title={ex.title} flex>
+            {ex.label}
+          </ChipButton>
+        ))}
+      </div>
+      <label
+        className="cursor-pointer border px-3 py-1.5 text-center text-xs transition-colors"
+        style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
+      >
+        Open .pdb / .mmCIF file…
+        <input
+          type="file"
+          accept=".pdb,.ent,.cif,.mmcif"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0]
+            if (!file) return
+            const data = await file.text()
+            const format = detectFormat(file.name, data)
+            onLoadFile({ data, format, id: file.name }, `local: ${file.name}`)
+            e.target.value = ''
+          }}
+        />
+      </label>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ligands input — text input + chip list, with browse link to the modal.
+
+function LigandsSection({
+  fasta,
+  setFasta,
+  ligandChains,
+}: {
+  fasta: string
+  setFasta: (s: string) => void
+  ligandChains: ParsedChain[]
+}) {
+  const [draft, setDraft] = useState('')
+  const setLigandInsert = useLigandInsertSlot((s) => s.setInsert)
+  const openDrawer = useLigandDrawer((s) => s.setOpen)
+
+  const addLigand = useCallback(
+    (raw: string) => {
+      const code = raw.trim().toUpperCase()
+      if (!code) return
+      // De-dup: skip if the same ligand chain is already in the input.
+      const re = new RegExp(`^>\\S+\\s+ligand\\s*\\r?\\n${code}\\b`, 'mi')
+      if (re.test(fasta)) return
+      const chunk = `>lig_${code} ligand\n${code}`
+      const next = fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`
+      setFasta(next)
+    },
+    [fasta, setFasta],
+  )
+
+  // Re-register the drawer's pick-a-ligand slot on every fasta change so it
+  // always closes over the latest value (avoids stale-closure dedup checks).
+  useEffect(() => {
+    setLigandInsert((ccd) => addLigand(ccd))
+    return () => setLigandInsert(null)
+  }, [addLigand, setLigandInsert])
+
+  const removeLigand = (chain: ParsedChain) => {
+    const code = chain.sequence.toUpperCase()
+    const name = chain.name || `lig_${code}`
+    // Remove the `>name ligand\nCODE\n` block. Tolerate optional extra blank lines.
+    const re = new RegExp(`>${name}\\s+ligand\\s*\\r?\\n${code}\\s*\\r?\\n?`, 'i')
+    setFasta(fasta.replace(re, '').replace(/\n{3,}/g, '\n\n'))
+  }
+
+  return (
+    <section className="flex flex-col gap-2">
+      <SectionLabel>Ligands</SectionLabel>
+      <div className="flex gap-1">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              addLigand(draft)
+              setDraft('')
+            }
+          }}
+          placeholder="CCD code (e.g. HEM, ATP, ZN)"
+          spellCheck={false}
+          className="flex-1 border px-2 py-1 font-mono text-xs uppercase tracking-wide"
+          style={{
+            borderColor: 'var(--rule)',
+            background: 'var(--background)',
+            color: 'var(--ink)',
+          }}
+        />
+        <ChipButton
+          onClick={() => {
+            addLigand(draft)
+            setDraft('')
+          }}
+        >
+          + Add
+        </ChipButton>
+      </div>
+      {ligandChains.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {ligandChains.map((c, i) => (
+            <span
+              key={`${c.name}-${i}`}
+              className="flex items-center gap-1.5 border px-2 py-0.5 text-xs"
+              style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+            >
+              <span className="font-mono uppercase tracking-wide">
+                {c.sequence.toUpperCase()}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeLigand(c)}
+                aria-label={`Remove ${c.sequence}`}
+                title="Remove"
+                style={{ color: 'var(--ink-faded)', fontSize: 14, lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={() => openDrawer(true)}
+        className="self-start text-xs underline-offset-2 hover:underline transition-colors"
+        style={{ color: 'var(--ink-faded)' }}
+      >
+        Browse cofactor library…
+      </button>
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Model selection — precision dropdown with autodetect recommendation.
+
+function ModelSection({
+  precision,
+  setPrecision,
+  device,
+}: {
+  precision: BoltzPrecision
+  setPrecision: (p: BoltzPrecision) => void
+  device: DeviceCapabilities | null
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <SectionLabel>Model</SectionLabel>
+      <select
+        value={precision}
+        onChange={(e) => setPrecision(e.target.value as BoltzPrecision)}
+        className="w-full border px-2 py-1.5 font-mono text-xs"
+        style={{
+          borderColor: 'var(--rule)',
+          background: 'var(--background)',
+          color: 'var(--ink)',
+        }}
+      >
+        {PRECISIONS.map((p) => (
+          <option key={p} value={p}>
+            {PRECISION_LABEL[p]}
+            {device?.recommendedPrecision === p ? '  ★ recommended' : ''}
+          </option>
+        ))}
+      </select>
+      {device && (
+        <p
+          className="text-xs leading-snug"
+          style={{ color: 'var(--ink-faded)' }}
+        >
+          {device.reason}
+        </p>
+      )}
+    </section>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Run rail — single button that auto-loads engine then predicts. Keyed by
+// precision so a precision change cleanly disposes the previous trio.
+
+function RunRail({
+  precision,
+  chains,
+  parseError,
+  polymerLen,
+  tooShort,
+  tooLong,
+}: {
+  precision: BoltzPrecision
+  chains: ParsedChain[]
+  parseError: string | null
+  polymerLen: number
+  tooShort: boolean
+  tooLong: boolean
+}) {
+  const bundle = useMemo(() => boltzBundle(precision), [precision])
+  const trunk = useModelSession(bundle.trunk)
+  const diffusion = useModelSession(bundle.diffusion_step)
+  const confidence = useModelSession(bundle.confidence)
+  const { setStructure, setStreamingFrame, setStreaming, setError, error } = useBoltz()
+
+  // Memory probes on session ready (instrumentation for the dev probe).
+  useEffect(() => {
+    if (trunk.status === 'ready') void recordMemoryPhase('engine.trunk.ready')
+  }, [trunk.status])
+  useEffect(() => {
+    if (diffusion.status === 'ready') void recordMemoryPhase('engine.diffusion.ready')
+  }, [diffusion.status])
+  useEffect(() => {
+    if (confidence.status === 'ready') void recordMemoryPhase('engine.confidence.ready')
+  }, [confidence.status])
+
+  const allReady =
+    trunk.status === 'ready' && diffusion.status === 'ready' && confidence.status === 'ready'
+  const anyLoading =
+    trunk.status === 'fetching' ||
+    trunk.status === 'compiling' ||
+    diffusion.status === 'fetching' ||
+    diffusion.status === 'compiling' ||
+    confidence.status === 'fetching' ||
+    confidence.status === 'compiling'
+  const anyError =
+    trunk.status === 'error' || diffusion.status === 'error' || confidence.status === 'error'
+
+  const bundleBytes = useMemo(() => bundleApproxBytes(precision), [precision])
+  const loadedBytes =
+    (trunk.progress?.bytesLoaded ?? 0) +
+    (diffusion.progress?.bytesLoaded ?? 0) +
+    (confidence.progress?.bytesLoaded ?? 0)
+  const loadPct = bundleBytes > 0 ? Math.min(100, (loadedBytes / bundleBytes) * 100) : 0
+
+  const [running, setRunning] = useState(false)
+  const [progress, setProgress] = useState<ProgressEvent | null>(null)
+  const [autoRun, setAutoRun] = useState(false)
+
+  const inputValid = !parseError && !tooShort && !tooLong && polymerLen > 0
+
+  const doPredict = useCallback(async () => {
+    if (!trunk.handle || !diffusion.handle || !confidence.handle) return
+    setRunning(true)
+    setError(null)
+    setProgress(null)
+    try {
+      await recordMemoryPhase('predict.start')
+      const withBlobs = await Promise.all(
+        chains.map(async (c) => {
+          if (c.type !== 'ligand') return c
+          const blob: LigandBlob = await loadLigandBlob(c.sequence)
+          return { ...c, blob }
+        }),
       )
+      const feats = featurizeChains(withBlobs)
+      await recordMemoryPhase('predict.featurized')
+
+      setStreaming(true)
+      const labelBase = withBlobs[0]?.name ? withBlobs[0].name.slice(0, 24) : 'unnamed'
+      const label =
+        withBlobs.length > 1 ? `${labelBase}+${withBlobs.length - 1}` : labelBase
+      const placeholderPlddt = new Float32Array(feats.N).fill(50)
+      const STREAM_EVERY = 3
+      let inFlight = false
+
+      const result = await predict({
+        feats,
+        trunk: trunk.handle,
+        diffusion: diffusion.handle,
+        confidence: confidence.handle,
+        recyclingSteps: 1,
+        samplingSteps: 50,
+        seed: 42,
+        onProgress: (e) => {
+          setProgress(e)
+          const milestone =
+            e.phase === 'sampling' &&
+            e.step !== undefined &&
+            e.total !== undefined &&
+            (e.step === 1 || e.step % 10 === 0 || e.step === e.total)
+          if (e.phase === 'recycling' || e.phase === 'confidence' || milestone) {
+            const lbl =
+              e.phase === 'sampling' ? `predict.sampling.${e.step}` : `predict.${e.phase}`
+            void recordMemoryPhase(lbl)
+          }
+        },
+        onStep: (denoised, step, total) => {
+          if (step % STREAM_EVERY !== 0 && step !== total) return
+          if (inFlight) return
+          inFlight = true
+          try {
+            const cifFrame = writeMmcif({
+              feats,
+              atomCoords: denoised,
+              plddt: placeholderPlddt,
+              chains: withBlobs,
+              modelId: `step-${step}`,
+            })
+            setStreamingFrame({
+              data: cifFrame,
+              format: 'mmcif',
+              id: `${label} (diffusion ${step}/${total})`,
+            })
+          } finally {
+            inFlight = false
+          }
+        },
+      })
+      await recordMemoryPhase('predict.done')
+      const cif = writeMmcif({
+        feats,
+        atomCoords: result.atomCoords,
+        plddt: result.plddt,
+        chains: withBlobs,
+        modelId: 'predicted',
+      })
+      setStructure(
+        { data: cif, format: 'mmcif', id: `${label} (predicted)` },
+        `Boltz-2 · ${chains.length} chain${chains.length > 1 ? 's' : ''} · ${(result.elapsedMs / 1000).toFixed(1)} s`,
+      )
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setRunning(false)
+      setStreaming(false)
     }
-    throw new Error(`AlphaFoldDB fetch failed: HTTP ${res.status}`)
+  }, [
+    chains,
+    trunk.handle,
+    diffusion.handle,
+    confidence.handle,
+    setError,
+    setStreaming,
+    setStreamingFrame,
+    setStructure,
+  ])
+
+  // Auto-run: when engine finishes loading after the user clicked Run,
+  // kick the predict immediately so the click is a single user action.
+  useEffect(() => {
+    if (autoRun && allReady && !running) {
+      setAutoRun(false)
+      void doPredict()
+    }
+  }, [autoRun, allReady, running, doPredict])
+
+  const onClick = () => {
+    if (running || anyLoading) return
+    if (!allReady) {
+      setAutoRun(true)
+      void trunk.load()
+      void diffusion.load()
+      void confidence.load()
+      return
+    }
+    void doPredict()
   }
-  const data = await res.text()
-  return { data, format: 'mmcif' as const, id: `AF-${acc}` }
+
+  let label: string
+  let disabled = false
+  if (running) {
+    label = phaseLabel(progress)
+    disabled = true
+  } else if (anyLoading) {
+    label = `Loading ${formatBytes(loadedBytes)} / ${formatBytes(bundleBytes)}`
+    disabled = true
+  } else if (autoRun) {
+    label = 'Preparing…'
+    disabled = true
+  } else if (allReady) {
+    label = inputValid ? 'Run' : 'Run'
+    disabled = !inputValid
+  } else {
+    label = inputValid ? `Run · download ${formatBytes(bundleBytes)} first` : 'Run'
+    disabled = !inputValid
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 px-5 py-3">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className="w-full px-3 py-2.5 text-sm font-medium transition-colors"
+        style={{
+          background: disabled ? 'var(--muted)' : 'var(--oxblood)',
+          color: disabled ? 'var(--ink-faded)' : 'var(--primary-foreground)',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          border: '1px solid',
+          borderColor: disabled ? 'var(--rule)' : 'var(--oxblood)',
+        }}
+      >
+        {label}
+      </button>
+      {anyLoading && (
+        <div
+          className="h-1 w-full overflow-hidden"
+          style={{ background: 'var(--rule)' }}
+        >
+          <div
+            className="h-full transition-[width]"
+            style={{ width: `${loadPct}%`, background: 'var(--oxblood)' }}
+          />
+        </div>
+      )}
+      {(anyError || error) && (
+        <p
+          className="text-xs leading-snug"
+          style={{ color: 'var(--destructive)' }}
+        >
+          {trunk.error ?? diffusion.error ?? confidence.error ?? error}
+        </p>
+      )}
+    </div>
+  )
 }
 
-/**
- * Fetch a UniProt entry by accession and return a FASTA-ready chunk.
- *
- * UniProt's JSON endpoint carries the sequence + protein name + organism +
- * a rich `features` array (active sites, modifications, variants, …) and
- * cross-references to AlphaFold / PDB. We use sequence + name + organism
- * to populate the FASTA box today; the full payload is stashed in window
- * scope as a forward-looking hook so Molero's channel-mapping system can
- * pick up per-residue features (modifications, variants, active sites)
- * without re-fetching.
- */
-async function fetchUniProt(accession: string): Promise<string> {
-  const acc = validateUniProtAccession(accession)
-  const res = await fetch(`https://rest.uniprot.org/uniprotkb/${acc}.json`)
-  if (!res.ok) {
-    if (res.status === 404) throw new Error(`UniProt accession '${acc}' not found`)
-    throw new Error(`UniProt fetch failed: HTTP ${res.status}`)
-  }
-  const data = await res.json()
-  const seq: string | undefined = data?.sequence?.value
-  if (!seq) throw new Error(`UniProt response for ${acc} has no sequence`)
-  const name: string =
-    data?.proteinDescription?.recommendedName?.fullName?.value ??
-    data?.proteinDescription?.submissionNames?.[0]?.fullName?.value ??
-    'unknown'
-  const organism: string = data?.organism?.scientificName ?? ''
-  const header = `>${acc} ${name}${organism ? ' | ' + organism : ''}`
-  // Stash the full payload — Molero Phase 2 (property channels) will read
-  // features[] (ACTIVE_SITE, MOD_RES, VARIANT, DISULFID, …) here without
-  // another network call. Keyed by accession so multiple loads coexist.
-  ;(window as unknown as { __uniprotCache?: Record<string, unknown> }).__uniprotCache =
-    {
-      ...((window as unknown as { __uniprotCache?: Record<string, unknown> }).__uniprotCache ?? {}),
-      [acc]: data,
-    }
-  return `${header}\n${seq}`
+// ─────────────────────────────────────────────────────────────────────────────
+// Sysdata tray — bottom strip: device tier · memory pressure bar.
+
+function tierLabel(tier: DeviceCapabilities['tier']): string {
+  if (tier === 'desktop-discrete') return 'Desktop (discrete GPU)'
+  if (tier === 'desktop-integrated') return 'Desktop (integrated GPU)'
+  return 'Mobile'
 }
 
-/**
- * Bottom status bar — Photoshop 7.0 register. Surfaces the three pieces
- * of session state that matter while the user is composing input:
- *
- *   left   : device tier + autodetect recommendation
- *   middle : memory pressure (compact bar + total / available)
- *   right  : precision + attribution
- *
- * Mounted at the app shell so it persists across every pane.
- */
-export function StatusBar() {
-  const { memoryEstimate, device, precision } = useBoltz()
+function SysdataTray({ device }: { device: DeviceCapabilities | null }) {
+  const memoryEstimate = useBoltz((s) => s.memoryEstimate)
   const palette = memoryEstimate
     ? ({
         idle: { fill: 'var(--ink-faded)', label: 'idle' },
-        green: { fill: '#3a7d4b', label: 'OK' },
-        yellow: { fill: '#b58a1e', label: 'TIGHT' },
-        red: { fill: 'var(--destructive)', label: 'OOM' },
+        green: { fill: '#3a7d4b', label: 'ok' },
+        yellow: { fill: '#b58a1e', label: 'tight' },
+        red: { fill: 'var(--destructive)', label: 'risk' },
       } as const)[memoryEstimate.level]
     : null
-  const pct = memoryEstimate
-    ? Math.min(memoryEstimate.pressureRatio, 1.5) / 1.5
-    : 0
+  const pct = memoryEstimate ? Math.min(memoryEstimate.pressureRatio, 1.5) / 1.5 : 0
+
   return (
     <div
-      className="flex items-center gap-3 border-t px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
+      className="flex flex-col gap-1 border-t px-5 py-2 text-[11px] leading-snug"
       style={{
         borderColor: 'var(--rule)',
         color: 'var(--ink-faded)',
         background: 'var(--card)',
       }}
     >
-      <span title={device?.reason ?? 'Detecting device…'}>
-        {device
-          ? `${device.tier}${device.webgpu ? ' · WebGPU' : ' · WASM only'}`
-          : 'Detecting device…'}
-      </span>
-
-      <span style={{ color: 'var(--rule)' }}>│</span>
-
-      <div className="flex flex-1 items-center gap-2">
-        <span style={{ minWidth: '4em' }}>
-          MEM {palette?.label ?? '—'}
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate" title={device?.reason ?? 'Detecting device…'}>
+          {device
+            ? `${tierLabel(device.tier)} · ${device.webgpu ? 'WebGPU' : 'WASM'}`
+            : 'Detecting device…'}
         </span>
-        <div
-          className="relative h-1.5 max-w-[260px] flex-1 overflow-hidden"
-          style={{ background: 'var(--rule)' }}
-          title={memoryEstimate?.reason}
-        >
-          {memoryEstimate && memoryEstimate.level !== 'idle' && (
-            <div
-              className="h-full transition-[width] duration-150"
-              style={{ width: `${pct * 100}%`, background: palette?.fill }}
-            />
-          )}
-          <div
-            className="absolute top-0 h-full w-px"
-            style={{
-              left: `${(0.9 / 1.5) * 100}%`,
-              background: 'var(--ink-faded)',
-              opacity: 0.5,
-            }}
-            aria-hidden
-          />
-        </div>
         {memoryEstimate && memoryEstimate.level !== 'idle' && (
-          <span style={{ minWidth: '11em', textAlign: 'right' }}>
-            {formatBytes(memoryEstimate.totalBytes)} / {formatBytes(memoryEstimate.availableBytes)}
+          <span className="shrink-0">
+            Memory {palette?.label} · {formatBytes(memoryEstimate.totalBytes)} / {formatBytes(memoryEstimate.availableBytes)}
           </span>
         )}
       </div>
-
-      <span style={{ color: 'var(--rule)' }}>│</span>
-
-      <span>precision · {precision}</span>
-
-      <span style={{ color: 'var(--rule)' }}>│</span>
-
-      <span style={{ color: 'var(--ink-faded)' }}>
-        Boltz-2 · Wohlwend et al. (MIT) · runs on your device
-      </span>
+      <div
+        className="relative h-1 w-full overflow-hidden"
+        style={{ background: 'var(--rule)' }}
+        title={memoryEstimate?.reason}
+      >
+        {memoryEstimate && memoryEstimate.level !== 'idle' && (
+          <div
+            className="h-full transition-[width]"
+            style={{ width: `${pct * 100}%`, background: palette?.fill }}
+          />
+        )}
+        <div
+          className="absolute top-0 h-full w-px"
+          style={{
+            left: `${(0.9 / 1.5) * 100}%`,
+            background: 'var(--ink-faded)',
+            opacity: 0.5,
+          }}
+          aria-hidden
+        />
+      </div>
     </div>
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BoltzInput — composes the left-pane sections + sticky run + sysdata tray.
 
 export function BoltzInput() {
   const {
     fasta,
     setFasta,
     setStructure,
-    setError,
     setMemoryEstimate,
     setDevice: setSharedDevice,
     setPrecisionMirror,
   } = useBoltz()
-  const [loadingExample, setLoadingExample] = useState(false)
   const [precision, setPrecisionLocal] = useState<BoltzPrecision>(DEFAULT_PRECISION)
-  // Wrap setPrecision so the store always mirrors the picker.
   const setPrecision = (p: BoltzPrecision) => {
     setPrecisionLocal(p)
     setPrecisionMirror(p)
   }
   const [device, setDevice] = useState<DeviceCapabilities | null>(null)
-  // Once the user clicks a different precision than the autodetect picked,
-  // we stop updating the default — their choice wins.
   const userPickedPrecision = useRef(false)
+
   useEffect(() => {
     let cancelled = false
     detectDevice().then((d) => {
       if (cancelled) return
       setDevice(d)
       setSharedDevice(d)
-      if (!userPickedPrecision.current) {
-        setPrecision(d.recommendedPrecision)
-      }
+      if (!userPickedPrecision.current) setPrecision(d.recommendedPrecision)
     })
     return () => {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  // Re-publish the memory estimate to the store on every render that
-  // could affect it. The StatusBar reads from the store, so this is the
-  // bridge from local state (fasta/precision/device) to the global rail.
+
   useEffect(() => {
     setMemoryEstimate(estimateMemory(fasta, precision, device))
   }, [fasta, precision, device, setMemoryEstimate])
-  const [uniprotAcc, setUniprotAcc] = useState('')
-  const [uniprotLoading, setUniprotLoading] = useState(false)
-  const [uniprotError, setUniprotError] = useState<string | null>(null)
-  const setLigandInsert = useLigandInsertSlot((s) => s.setInsert)
 
-  // Wire the drawer's "click a ligand" action to this textarea. Re-registers
-  // on every render so the slot always closes over the latest fasta string —
-  // the drawer can be opened/clicked any time without staleness.
-  useEffect(() => {
-    setLigandInsert((ccd) => {
-      const code = ccd.toUpperCase()
-      // De-dup: skip if the same ligand chain is already in the input.
-      const tag = `ligand`
-      const re = new RegExp(`^>\\S+\\s+${tag}\\s*\\r?\\n${code}\\b`, 'mi')
-      if (re.test(fasta)) return
-      const chunk = `>lig_${code} ligand\n${code}`
-      const next = fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`
-      setFasta(next)
-    })
-    return () => setLigandInsert(null)
-  }, [fasta, setFasta, setLigandInsert])
+  // Parse FASTA on every render — cheap, and the chip list + length preview
+  // need to track edits live. Errors are surfaced inline rather than thrown.
+  let chains: ParsedChain[] = []
+  let parseError: string | null = null
+  try {
+    chains = parseFasta(fasta)
+  } catch (e) {
+    parseError = (e as Error).message
+  }
+  const cleaned = chains.map((c) => ({
+    ...c,
+    sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase(),
+  }))
+  const polymerChains = cleaned.filter((c) => c.type !== 'ligand')
+  const ligandChains = cleaned.filter((c) => c.type === 'ligand')
+  const polymerLen = polymerChains.reduce((acc, c) => acc + c.sequence.length, 0)
+  const tooShort = polymerLen > 0 && polymerLen < 8
+  const tooLong = polymerLen > 1024
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* Predict section */}
-      <div className="flex flex-col gap-2">
-        <label
-          className="font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          Predict from sequence
-        </label>
-        <textarea
-          value={fasta}
-          onChange={(e) => setFasta(e.target.value)}
-          rows={5}
-          spellCheck={false}
-          placeholder=">my_protein&#10;MKLLI…"
-          className="w-full resize-y border p-2 font-mono text-xs leading-relaxed"
-          style={{
-            borderColor: 'var(--rule)',
-            background: 'var(--paper-mottle)',
-            color: 'var(--ink)',
-          }}
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Scrollable content region — sections stack vertically. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+        <SequencesSection
+          fasta={fasta}
+          setFasta={setFasta}
+          parseError={parseError}
+          polymerChainCount={polymerChains.length}
+          ligandChainCount={ligandChains.length}
+          polymerLen={polymerLen}
+          tooShort={tooShort}
+          tooLong={tooLong}
+          onLoadFile={(payload, source) => setStructure(payload, source)}
         />
-        <div className="flex flex-wrap gap-1">
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_1L2Y)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="Trp-cage miniprotein — smallest validated target"
-          >
-            1L2Y · 20 aa
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_1CRN)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="Crambin — small plant protein, three disulfides"
-          >
-            1CRN · 46 aa
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_1UBQ)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="Ubiquitin — classic fold benchmark"
-          >
-            1UBQ · 76 aa
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_DIMER)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="1L2Y homodimer — smallest multi-chain target"
-          >
-            Dimer · 2×20
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_RNA)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="UUCG tetraloop — small RNA hairpin (10 nt)"
-          >
-            RNA · 10 nt
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_DNA)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="Drew–Dickerson dodecamer — B-form DNA duplex (2 × 12 nt)"
-          >
-            DNA · 2×12
-          </button>
-          <button
-            type="button"
-            onClick={() => setFasta(EXAMPLE_PROT_LIG)}
-            className="flex-1 border px-2 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-            title="Crambin + heme cofactor — first ligand cofolding test"
-          >
-            Prot + HEM
-          </button>
-        </div>
-
-        {/* UniProt-accession loader — one shared input drives two actions:
-              · AlphaFold (primary)   — fetch precomputed mmCIF and render
-                                        immediately; no Boltz inference needed.
-              · Sequence (secondary) — populate the FASTA box for a refold.
-            Full UniProt JSON is cached on window.__uniprotCache so Molero's
-            Phase-2 channel mappings can read per-residue features later. */}
-        <label
-          className="mt-1 font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          UniProt accession
-        </label>
-        <div className="flex gap-1">
-          <input
-            type="text"
-            value={uniprotAcc}
-            onChange={(e) => setUniprotAcc(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !uniprotLoading) {
-                e.preventDefault()
-                e.currentTarget.blur()
-                // Enter defaults to the primary action: render AlphaFold structure.
-                ;(async () => {
-                  setUniprotLoading(true)
-                  setUniprotError(null)
-                  try {
-                    const payload = await fetchAlphaFold(uniprotAcc)
-                    setStructure(payload, `AlphaFoldDB · ${payload.id}`)
-                  } catch (err) {
-                    setUniprotError((err as Error).message)
-                  } finally {
-                    setUniprotLoading(false)
-                  }
-                })()
-              }
-            }}
-            placeholder="P02768"
-            spellCheck={false}
-            className="flex-1 border px-2 py-1 font-mono text-xs uppercase tracking-wide"
-            style={{
-              borderColor: 'var(--rule)',
-              background: 'var(--paper-mottle)',
-              color: 'var(--ink)',
-            }}
-          />
-          <button
-            type="button"
-            disabled={uniprotLoading || !uniprotAcc.trim()}
-            onClick={async () => {
-              setUniprotLoading(true)
-              setUniprotError(null)
-              try {
-                const payload = await fetchAlphaFold(uniprotAcc)
-                setStructure(payload, `AlphaFoldDB · ${payload.id}`)
-              } catch (err) {
-                setUniprotError((err as Error).message)
-              } finally {
-                setUniprotLoading(false)
-              }
-            }}
-            className="border px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{
-              borderColor: 'var(--oxblood)',
-              color: 'var(--ink)',
-              background: 'var(--paper-mottle)',
-              opacity: uniprotLoading || !uniprotAcc.trim() ? 0.5 : 1,
-            }}
-            title="Fetch the precomputed AlphaFold structure (mmCIF) and render it directly — no Boltz inference."
-          >
-            {uniprotLoading ? 'Fetching…' : 'AlphaFold'}
-          </button>
-          <button
-            type="button"
-            disabled={uniprotLoading || !uniprotAcc.trim()}
-            onClick={async () => {
-              setUniprotLoading(true)
-              setUniprotError(null)
-              try {
-                const chunk = await fetchUniProt(uniprotAcc)
-                setFasta(chunk)
-              } catch (err) {
-                setUniprotError((err as Error).message)
-              } finally {
-                setUniprotLoading(false)
-              }
-            }}
-            className="border px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
-            style={{
-              borderColor: 'var(--rule)',
-              color: 'var(--ink-faded)',
-              opacity: uniprotLoading || !uniprotAcc.trim() ? 0.5 : 1,
-            }}
-            title="Fetch sequence + UniProt metadata into the FASTA box, ready to refold with Boltz."
-          >
-            Sequence
-          </button>
-        </div>
-        {uniprotError && (
-          <p
-            className="font-mono text-[10px] uppercase tracking-widest"
-            style={{ color: 'var(--destructive)' }}
-          >
-            {uniprotError}
-          </p>
-        )}
-
-        <label
-          className="mt-1 font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          Precision
-        </label>
-        <div className="flex flex-col gap-1">
-          {PRECISIONS.map((p) => {
-            const isRecommended = device?.recommendedPrecision === p
-            return (
-              <label
-                key={p}
-                className="flex cursor-pointer items-center gap-2 border p-2 text-xs"
-                style={{
-                  borderColor: precision === p ? 'var(--oxblood)' : 'var(--rule)',
-                  background: precision === p ? 'var(--paper-mottle)' : 'transparent',
-                }}
-              >
-                <input
-                  type="radio"
-                  name="boltz-precision"
-                  checked={precision === p}
-                  onChange={() => {
-                    userPickedPrecision.current = true
-                    setPrecision(p)
-                  }}
-                />
-                <span style={{ color: 'var(--ink)' }}>{PRECISION_LABEL[p]}</span>
-                {isRecommended && (
-                  <span
-                    className="ml-auto font-mono text-[9px] uppercase tracking-widest"
-                    style={{ color: 'var(--oxblood)' }}
-                    title={device?.reason}
-                  >
-                    ★ recommended
-                  </span>
-                )}
-              </label>
-            )
-          })}
-        </div>
-        {device && (
-          <p
-            className="font-mono text-[9px] uppercase tracking-widest leading-snug"
-            style={{ color: 'var(--ink-faded)' }}
-          >
-            {device.reason}
-          </p>
-        )}
-
-        {/* Precision change remounts the loader, disposing previous sessions. */}
-        <EngineLoaderFor key={precision} precision={precision} />
+        <LigandsSection
+          fasta={fasta}
+          setFasta={setFasta}
+          ligandChains={ligandChains}
+        />
+        <ModelSection
+          precision={precision}
+          setPrecision={(p) => {
+            userPickedPrecision.current = true
+            setPrecision(p)
+          }}
+          device={device}
+        />
       </div>
 
-      <div className="h-px" style={{ background: 'var(--rule)' }} aria-hidden />
-
-      {/* Viewer section — live today */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          className="font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          Load a structure
-        </label>
-        <label
-          className="cursor-pointer border px-3 py-2 text-center text-sm transition-colors"
-          style={{
-            borderColor: 'var(--rule)',
-            background: 'var(--paper-mottle)',
-            color: 'var(--ink)',
-          }}
-        >
-          Choose .pdb or .mmCIF…
-          <input
-            type="file"
-            accept=".pdb,.ent,.cif,.mmcif"
-            className="hidden"
-            onChange={async (e) => {
-              const file = e.target.files?.[0]
-              if (!file) return
-              try {
-                const data = await file.text()
-                const format = detectFormat(file.name, data)
-                setStructure({ data, format, id: file.name }, `local: ${file.name}`)
-              } catch (err) {
-                setError((err as Error).message)
-              }
-              e.target.value = ''
-            }}
-          />
-        </label>
-        <Button
-          variant="outline"
-          disabled={loadingExample}
-          onClick={async () => {
-            setLoadingExample(true)
-            try {
-              const payload = await fetchExample()
-              setStructure(payload, 'RCSB 1CRN · Crambin (46 aa)')
-            } catch (err) {
-              setError((err as Error).message)
-            } finally {
-              setLoadingExample(false)
-            }
-          }}
-        >
-          {loadingExample ? 'Fetching example…' : 'Load example (Crambin, 46 aa)'}
-        </Button>
+      {/* Sticky bottom: run rail (key forces remount per precision) + sysdata tray. */}
+      <div className="shrink-0">
+        <RunRail
+          key={precision}
+          precision={precision}
+          chains={cleaned}
+          parseError={parseError}
+          polymerLen={polymerLen}
+          tooShort={tooShort}
+          tooLong={tooLong}
+        />
+        <SysdataTray device={device} />
       </div>
-
-      <div className="h-px" style={{ background: 'var(--rule)' }} aria-hidden />
-
-      <FeaturizerSelfCheck />
     </div>
   )
 }
 
+// Dev-only featurizer regression targets. Kept around for the (unmounted)
+// FeaturizerSelfCheck panel so re-enabling it is one mount call.
 const GOLDEN_TARGETS: { id: string; seq: string; url: string; aa: number }[] = [
   {
     id: '1L2Y',
@@ -1164,7 +886,9 @@ const GOLDEN_TARGETS: { id: string; seq: string; url: string; aa: number }[] = [
   },
 ]
 
-function FeaturizerSelfCheck() {
+// Exported so TS doesn't kill it as unused. Not mounted in any pane; dev users
+// who want it can drop `<FeaturizerSelfCheck />` into MemoryProbe or similar.
+export function FeaturizerSelfCheck() {
   const [running, setRunning] = useState<string | null>(null)
   const [report, setReport] = useState<ValidationReport | null>(null)
   const runOne = async (t: (typeof GOLDEN_TARGETS)[number]) => {
@@ -1461,21 +1185,31 @@ export function BoltzCanvas() {
   }
 
   if (error) {
-    return <p style={{ color: 'var(--destructive)' }}>{error}</p>
+    return (
+      <div className="flex h-full items-center justify-center px-6">
+        <p
+          className="max-w-md text-center text-sm"
+          style={{ color: 'var(--destructive)' }}
+        >
+          {error}
+        </p>
+      </div>
+    )
   }
   if (!structure) {
     return (
-      <div className="flex h-full min-h-[280px] items-center justify-center">
-        <p className="max-w-md text-center" style={{ color: 'var(--ink-faded)' }}>
-          Load a structure on the left to inspect it. Atoms render as
-          property-channelled spheres + bonds; confidence drives emission;
-          chains weave through as colored cartoon ribbons.
+      <div className="flex h-full items-center justify-center px-6">
+        <p
+          className="max-w-md text-center text-sm leading-relaxed"
+          style={{ color: 'var(--ink-faded)' }}
+        >
+          Paste a sequence or open a structure file to begin.
         </p>
       </div>
     )
   }
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex h-full min-h-0 flex-col">
       {USE_MOLERO ? (
         <>
           <MoleroViewer

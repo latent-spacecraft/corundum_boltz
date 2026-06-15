@@ -1,126 +1,85 @@
 /**
- * App shell — Photoshop 7.0 register.
+ * App shell — Braun register, golden-ratio split, 100vh.
  *
- *   ┌───────────────────────────────────────────────────────┐
- *   │  Top bar  : Logo + title + version                    │
- *   ├───────────┬───────────────────────────────────────────┤
- *   │ Options   │             Canvas (Mol\*)                │
- *   │ (left     │                                           │
- *   │ vertical, │                                           │
- *   │ 340px)    │                                           │
- *   ├───────────┴───────────────────────────────────────────┤
- *   │ Status bar : device · memory · precision · attribution│
- *   └───────────────────────────────────────────────────────┘
- *   ▶ WebGPU debug (overlay)
+ *   ┌─────────────────────────────────────────────────────────┐
+ *   │ Left pane (38.2%)    │  Toolbar  ─────────────────────  │
+ *   │   Logo + wordmark    │  ╭─────────────────────────────╮ │
+ *   │   Sequences          │  │                             │ │
+ *   │   Ligands            │  │                             │ │
+ *   │   Model              │  │         Canvas (Mol\*)      │ │
+ *   │   Run                │  │                             │ │
+ *   │   Sysdata            │  ╰─────────────────────────────╯ │
+ *   └─────────────────────────────────────────────────────────┘
  *
- * The legacy Output pane (mmCIF stats / provenance) was pulled when the
- * canvas became the entire story; nothing it surfaced wasn't already
- * captured by the console + the act's predict-panel status line. Mol\*
- * is the alpha-default renderer (Molero gates behind VITE_USE_MOLERO=1
- * in BoltzAct). The footer attribution moved into the status bar.
+ * No page scroll: the outer container is exactly 100vh and the left
+ * pane scrolls internally if its content exceeds the viewport (rare
+ * on standard sizes). Right pane is canvas-first; the toolbar floats
+ * just above the viewport rectangle and the canvas claims everything
+ * below it.
+ *
+ * Debug panels (MemoryProbe, WebGpuDebug) only mount in dev mode —
+ * import.meta.env.DEV is statically false in Vite's production build
+ * so they're tree-shaken out of the alpha bundle entirely.
  */
-import { BoltzCanvas, BoltzInput, StatusBar } from './acts/boltz/BoltzAct'
+import { BoltzCanvas, BoltzInput } from './acts/boltz/BoltzAct'
 import { LigandDrawer } from './acts/boltz/LigandDrawer'
-// GemShellDrawer is deprecated for the alpha — its controls (gem-shell
-// material, refractive overlay) were the Molero-era visual exploration.
-// With Mol\* as the default renderer, surfacing those knobs to alpha users
-// just confuses the UX. File kept on disk; re-import if Molero re-enables.
-// import { GemShellDrawer } from './acts/boltz/GemShellDrawer'
 import { WebGpuDebug } from './debug/WebGpuDebug'
 import { MemoryProbe } from './debug/MemoryProbe'
 import { GemLogo } from './components/GemLogo'
 
 export function App() {
   return (
-    <div className="flex min-h-screen flex-col">
-      <header
-        className="border-b px-6 py-2"
-        style={{ borderColor: 'var(--rule)' }}
+    <div
+      className="grid h-screen w-screen overflow-hidden"
+      style={{
+        gridTemplateColumns: '38.2% 61.8%',
+        background: 'var(--background)',
+        color: 'var(--foreground)',
+      }}
+    >
+      <aside
+        className="flex h-full min-h-0 flex-col overflow-hidden border-r"
+        style={{
+          borderColor: 'var(--rule)',
+          background: 'var(--card)',
+        }}
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <GemLogo
-              size={56}
-              title="Corundum"
-              onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            />
-            <h1
-              className="text-2xl"
-              style={{
-                fontFamily: 'var(--font-display)',
-                color: 'var(--foreground)',
-                fontWeight: 600,
-                letterSpacing: '-0.015em',
-                lineHeight: 1,
-              }}
-            >
-              Corundum<span style={{ color: 'var(--ink-faded)', margin: '0 0.45em', fontWeight: 300 }}>/</span><span style={{ fontWeight: 400 }}>Boltz-2</span>
-            </h1>
-          </div>
-          <span
-            className="font-mono text-[10px] uppercase tracking-widest"
-            style={{ color: 'var(--ink-faded)' }}
+        <header
+          className="flex shrink-0 items-center gap-3 px-5 py-4 border-b"
+          style={{ borderColor: 'var(--rule)' }}
+        >
+          <GemLogo size={28} title="Corundum" />
+          <h1
+            className="text-base"
+            style={{
+              fontWeight: 500,
+              letterSpacing: '-0.01em',
+              lineHeight: 1,
+            }}
           >
-            Browser-native Boltz-2 · v0.1
-          </span>
-        </div>
-      </header>
-
-      <main className="grid flex-1 grid-cols-1 gap-px lg:grid-cols-[340px_1fr]" style={{ background: 'var(--rule)' }}>
-        <Pane title="Input" ordinal="I">
+            Corundum
+            <span style={{ color: 'var(--ink-faded)', margin: '0 0.4em', fontWeight: 300 }}>
+              /
+            </span>
+            <span style={{ fontWeight: 400 }}>Boltz-2</span>
+          </h1>
+        </header>
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <BoltzInput />
-        </Pane>
-        <Pane title="Canvas" ordinal="II">
-          <BoltzCanvas />
-        </Pane>
+        </div>
+      </aside>
+
+      <main className="flex h-full min-h-0 flex-col overflow-hidden">
+        <BoltzCanvas />
       </main>
 
-      <StatusBar />
-
       <LigandDrawer />
-      <MemoryProbe />
-      <WebGpuDebug />
+      {import.meta.env.DEV && (
+        <>
+          <MemoryProbe />
+          <WebGpuDebug />
+        </>
+      )}
     </div>
-  )
-}
-
-function Pane({
-  title,
-  ordinal,
-  children,
-}: {
-  title: string
-  ordinal: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className="flex flex-col" style={{ background: 'var(--card)' }}>
-      <header
-        className="flex items-baseline justify-between border-b px-3 py-2"
-        style={{ borderColor: 'var(--rule)' }}
-      >
-        <h2
-          className="text-sm font-medium"
-          style={{
-            fontFamily: 'var(--font-display)',
-            color: 'var(--foreground)',
-          }}
-        >
-          {title}
-        </h2>
-        <span
-          className="font-mono text-[10px] uppercase tracking-widest"
-          style={{ color: 'var(--ink-faded)' }}
-        >
-          {ordinal}
-        </span>
-      </header>
-      <div
-        className="flex-1 overflow-auto p-4 text-sm"
-        style={{ color: 'var(--foreground)' }}
-      >
-        {children}
-      </div>
-    </section>
   )
 }

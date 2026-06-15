@@ -191,7 +191,15 @@ export function MolViewer({ structure, className }: Props) {
   }
 
   return (
-    <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div
+      className={className}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+      }}
+    >
       <Toolbar
         representation={representation}
         onRepresentationChange={setRepresentation}
@@ -205,11 +213,10 @@ export function MolViewer({ structure, className }: Props) {
         ref={containerRef}
         style={{
           position: 'relative',
+          flex: '1 1 0',
+          minHeight: 0,
           width: '100%',
-          aspectRatio: '4 / 3',
-          minHeight: 320,
-          border: '1px solid var(--rule)',
-          background: 'var(--paper-mottle)',
+          background: 'var(--background)',
           overflow: 'hidden',
         }}
       >
@@ -270,14 +277,14 @@ function Toolbar({
 }) {
   return (
     <div
-      className="flex flex-wrap items-center gap-1 border p-1 font-mono text-[10px] uppercase tracking-widest"
+      className="flex flex-wrap items-center gap-2 border-b px-3 py-2 text-xs"
       style={{
         borderColor: 'var(--rule)',
         background: 'var(--card)',
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <span style={{ color: 'var(--ink-faded)', paddingInline: 4 }}>Rep</span>
+      <span style={{ color: 'var(--ink-faded)' }}>Representation</span>
       <Segmented
         value={representation}
         options={Object.keys(REPRESENTATION_LABEL) as Representation[]}
@@ -286,7 +293,7 @@ function Toolbar({
         disabled={disabled}
       />
       <span style={{ color: 'var(--rule)' }}>│</span>
-      <span style={{ color: 'var(--ink-faded)', paddingInline: 4 }}>Color</span>
+      <span style={{ color: 'var(--ink-faded)' }}>Color</span>
       <Segmented
         value={colorTheme}
         options={Object.keys(COLOR_LABEL) as ColorTheme[]}
@@ -294,26 +301,26 @@ function Toolbar({
         onChange={onColorThemeChange}
         disabled={disabled}
       />
-      <span style={{ color: 'var(--rule)', flex: '1 0 auto' }} />
+      <span style={{ flex: '1 0 auto' }} />
       <button
         type="button"
         onClick={onResetCamera}
         disabled={disabled}
-        className="border px-2 py-0.5"
+        className="border px-2 py-1 text-xs"
         style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
         title="Reset camera"
       >
-        ⟳ camera
+        Reset view
       </button>
       <button
         type="button"
         onClick={onScreenshot}
         disabled={disabled}
-        className="border px-2 py-0.5"
+        className="border px-2 py-1 text-xs"
         style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
         title="Download PNG"
       >
-        ⤓ png
+        Save PNG
       </button>
     </div>
   )
@@ -342,7 +349,7 @@ function Segmented<T extends string>({
             type="button"
             onClick={() => onChange(opt)}
             disabled={disabled}
-            className="border px-2 py-0.5"
+            className="border px-2 py-1 text-xs"
             style={{
               borderColor: active ? 'var(--oxblood)' : 'var(--rule)',
               background: active ? 'var(--paper-mottle)' : 'transparent',
