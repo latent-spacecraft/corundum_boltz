@@ -26,6 +26,9 @@ import 'molstar/build/viewer/molstar.css'
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec'
 import { PluginContext } from 'molstar/lib/mol-plugin/context'
 import { PluginCommands } from 'molstar/lib/mol-plugin/commands'
+import { to_mmCIF } from 'molstar/lib/mol-model/structure/export/mmcif'
+
+import { downloadText, mmcifToPdb } from './structureExport'
 
 export type StructureFormat = 'pdb' | 'mmcif'
 
@@ -171,6 +174,43 @@ export function MolViewer({ structure, className }: Props) {
     void PluginCommands.Camera.Reset(plugin, {})
   }
 
+  /**
+   * Pull a fresh mmCIF from the current viewer state. Falls back to the
+   * untouched source string when it's already mmCIF — round-tripping
+   * through Mol*'s exporter would needlessly re-encode and could drop the
+   * pLDDT B-factor column Boltz writes directly.
+   */
+  const currentMmcif = (): string => {
+    if (!structure) throw new Error('No structure loaded')
+    if (structure.format === 'mmcif') return structure.data
+    const plugin = pluginRef.current
+    if (!plugin) throw new Error('Viewer not ready')
+    const loaded = plugin.managers.structure.hierarchy.current.structures[0]
+    const s = loaded?.cell.obj?.data
+    if (!s) throw new Error('No structure loaded')
+    const result = to_mmCIF(structure.id, s, false, { copyAllCategories: true })
+    return typeof result === 'string' ? result : new TextDecoder().decode(result)
+  }
+
+  const saveMmcif = () => {
+    try {
+      const cif = currentMmcif()
+      downloadText(cif, `${structure?.id ?? 'structure'}.cif`, 'chemical/x-cif')
+    } catch (e) {
+      console.error('[MolViewer] mmCIF export failed:', e)
+    }
+  }
+
+  const savePdb = () => {
+    try {
+      const cif = currentMmcif()
+      const pdb = mmcifToPdb(cif, structure?.id ?? 'STRUCTURE')
+      downloadText(pdb, `${structure?.id ?? 'structure'}.pdb`, 'chemical/x-pdb')
+    } catch (e) {
+      console.error('[MolViewer] PDB export failed:', e)
+    }
+  }
+
   const screenshot = async () => {
     const plugin = pluginRef.current
     if (!plugin) return
@@ -207,6 +247,8 @@ export function MolViewer({ structure, className }: Props) {
         onColorThemeChange={setColorTheme}
         onResetCamera={resetCamera}
         onScreenshot={screenshot}
+        onSaveMmcif={saveMmcif}
+        onSavePdb={savePdb}
         disabled={!structure}
       />
       <div
@@ -265,6 +307,8 @@ function Toolbar({
   onColorThemeChange,
   onResetCamera,
   onScreenshot,
+  onSaveMmcif,
+  onSavePdb,
   disabled,
 }: {
   representation: Representation
@@ -273,6 +317,8 @@ function Toolbar({
   onColorThemeChange: (c: ColorTheme) => void
   onResetCamera: () => void
   onScreenshot: () => void
+  onSaveMmcif: () => void
+  onSavePdb: () => void
   disabled: boolean
 }) {
   return (
@@ -314,13 +360,33 @@ function Toolbar({
       </button>
       <button
         type="button"
+        onClick={onSaveMmcif}
+        disabled={disabled}
+        className="border px-2 py-1 text-xs transition-colors"
+        style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
+        title="Download mmCIF (.cif)"
+      >
+        mmCIF
+      </button>
+      <button
+        type="button"
+        onClick={onSavePdb}
+        disabled={disabled}
+        className="border px-2 py-1 text-xs transition-colors"
+        style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
+        title="Download PDB (.pdb)"
+      >
+        PDB
+      </button>
+      <button
+        type="button"
         onClick={onScreenshot}
         disabled={disabled}
         className="border px-2 py-1 text-xs transition-colors"
         style={{ borderColor: 'var(--oxblood)', color: 'var(--oxblood)' }}
         title="Download PNG"
       >
-        Save PNG
+        PNG
       </button>
     </div>
   )
