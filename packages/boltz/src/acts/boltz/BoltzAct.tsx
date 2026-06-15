@@ -16,17 +16,28 @@
  * Slice 3 = orchestration loops).
  */
 import { create } from 'zustand'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import type { StructurePayload } from './MolViewer'
+import { MolViewer, type StructurePayload } from './MolViewer'
 import {
   MoleroViewer,
-  type MoleroRepresentation,
+  DEFAULT_LAYERS,
+  type MoleroLayers,
   BUNDLED_GLASS_PRESET,
   type GlassPreset,
 } from 'molero'
+
+/**
+ * Alpha-default: Mol* renders structures in shipped builds. Molero
+ * stays importable behind a Vite env flag so we can A/B locally
+ * without touching code. Toggle with `VITE_USE_MOLERO=1 npm run dev`.
+ */
+const USE_MOLERO = import.meta.env.VITE_USE_MOLERO === '1'
 import { useModelSession } from '@/hooks/useModelSession'
 import { formatBytes } from '@/engine/fetcher'
+import { detectDevice, type DeviceCapabilities } from '@/engine/device'
+import { estimateMemory, type MemoryEstimate } from '@/engine/memory'
+import { recordPhase as recordMemoryPhase } from '@/engine/memoryProbe'
 import {
   boltzBundle,
   bundleApproxBytes,
@@ -54,19 +65,32 @@ interface BoltzActState {
    * then restores the full jewelry treatment on the final frame.
    */
   streaming: boolean
+  /** Live memory-pressure estimate, published by BoltzInput, read by StatusBar. */
+  memoryEstimate: MemoryEstimate | null
+  /** Device capabilities snapshot, published once by BoltzInput. */
+  device: DeviceCapabilities | null
+  /** Currently-selected precision, mirrored from BoltzInput so the status
+   *  bar can label "fp32 engine warm" without a prop drill. */
+  precision: BoltzPrecision
   setStructure: (payload: StructurePayload | null, source: string) => void
   setStreamingFrame: (payload: StructurePayload) => void
   setStreaming: (s: boolean) => void
   setError: (e: string | null) => void
   setFasta: (text: string) => void
+  setMemoryEstimate: (m: MemoryEstimate | null) => void
+  setDevice: (d: DeviceCapabilities | null) => void
+  setPrecisionMirror: (p: BoltzPrecision) => void
 }
 
-const useBoltz = create<BoltzActState>((set) => ({
+export const useBoltz = create<BoltzActState>((set) => ({
   structure: null,
   source: '',
   error: null,
   fasta: '',
   streaming: false,
+  memoryEstimate: null,
+  device: null,
+  precision: DEFAULT_PRECISION,
   setStructure: (payload, source) =>
     set({ structure: payload, source, error: null, streaming: false }),
   // Streaming frames replace structure but keep the source line stable so
@@ -75,6 +99,9 @@ const useBoltz = create<BoltzActState>((set) => ({
   setStreaming: (s) => set({ streaming: s }),
   setError: (e) => set({ error: e }),
   setFasta: (text) => set({ fasta: text }),
+  setMemoryEstimate: (m) => set({ memoryEstimate: m }),
+  setDevice: (d) => set({ device: d }),
+  setPrecisionMirror: (p) => set({ precision: p }),
 }))
 
 function detectFormat(name: string, content: string): 'pdb' | 'mmcif' {
@@ -167,6 +194,18 @@ function EngineLoaderFor({ precision }: { precision: BoltzPrecision }) {
   const diffusion = useModelSession(bundle.diffusion_step)
   const confidence = useModelSession(bundle.confidence)
 
+  // Memory probes when each session goes ready. These fire once per
+  // session lifecycle thanks to the status comparison.
+  useEffect(() => {
+    if (trunk.status === 'ready') void recordMemoryPhase('engine.trunk.ready')
+  }, [trunk.status])
+  useEffect(() => {
+    if (diffusion.status === 'ready') void recordMemoryPhase('engine.diffusion.ready')
+  }, [diffusion.status])
+  useEffect(() => {
+    if (confidence.status === 'ready') void recordMemoryPhase('engine.confidence.ready')
+  }, [confidence.status])
+
   const allIdle =
     trunk.status === 'idle' &&
     diffusion.status === 'idle' &&
@@ -239,29 +278,8 @@ function EngineLoaderFor({ precision }: { precision: BoltzPrecision }) {
         </div>
       )}
 
-      {allReady && precision !== 'fp16' && (
+      {allReady && (
         <PredictPanel trunk={trunk.handle!} diffusion={diffusion.handle!} confidence={confidence.handle!} />
-      )}
-
-      {allReady && precision === 'fp16' && (
-        <div
-          className="flex flex-col gap-2 border p-3"
-          style={{ borderColor: 'var(--rule)' }}
-        >
-          <p
-            className="font-mono text-[10px] uppercase tracking-widest leading-relaxed"
-            style={{ color: 'var(--oxblood)' }}
-          >
-            Engine warm · {trunk.handle?.executionProvider}
-          </p>
-          <p className="text-xs" style={{ color: 'var(--ink-faded)' }}>
-            v0.1 TS orchestrator routes fp32 graph boundaries; int8 inherits the
-            same boundaries (quantize_dynamic keeps I/O fp32, only weights
-            quantize). fp16 boundaries need an explicit pack/unpack path that
-            lands in a follow-up. Reload as <strong>int8</strong> (mobile-tier
-            default) or <strong>fp32</strong> to run the live demo.
-          </p>
-        </div>
       )}
 
       {anyError && (
@@ -393,6 +411,7 @@ function PredictPanel({
           setStats(null)
           setProgress(null)
           try {
+            await recordMemoryPhase('predict.start')
             // Resolve ligand blobs from /ccd/<CODE>.json before featurizing.
             // Polymer chains pass through unchanged.
             const withBlobs = await Promise.all(
@@ -403,6 +422,7 @@ function PredictPanel({
               }),
             )
             const feats = featurizeChains(withBlobs)
+            await recordMemoryPhase('predict.featurized')
 
             // Streaming setup: throttle per-step frames to ~1 in every 3
             // diffusion steps so the canvas rebuild (wire + side-chains +
@@ -429,7 +449,29 @@ function PredictPanel({
               recyclingSteps: 1,
               samplingSteps: 50,
               seed: 42,
-              onProgress: (e) => setProgress(e),
+              onProgress: (e) => {
+                setProgress(e)
+                // Phase-boundary probes (not every step) — measureUserAgent…
+                // takes ~50-200 ms and would dominate the diffusion loop if
+                // called per step. Recycling fires once; sampling first +
+                // every 10th step; confidence once at entry.
+                const isSamplingMilestone =
+                  e.phase === 'sampling' &&
+                  e.step !== undefined &&
+                  e.total !== undefined &&
+                  (e.step === 1 || e.step % 10 === 0 || e.step === e.total)
+                if (
+                  e.phase === 'recycling' ||
+                  e.phase === 'confidence' ||
+                  isSamplingMilestone
+                ) {
+                  const label =
+                    e.phase === 'sampling'
+                      ? `predict.sampling.${e.step}`
+                      : `predict.${e.phase}`
+                  void recordMemoryPhase(label)
+                }
+              },
               onStep: (denoised, step, total) => {
                 if (step % STREAM_EVERY !== 0 && step !== total) return
                 if (inFlight) return
@@ -453,6 +495,7 @@ function PredictPanel({
                 }
               },
             })
+            await recordMemoryPhase('predict.done')
             const cif = writeMmcif({
               feats,
               atomCoords: result.atomCoords,
@@ -645,10 +688,133 @@ async function fetchUniProt(accession: string): Promise<string> {
   return `${header}\n${seq}`
 }
 
+/**
+ * Bottom status bar — Photoshop 7.0 register. Surfaces the three pieces
+ * of session state that matter while the user is composing input:
+ *
+ *   left   : device tier + autodetect recommendation
+ *   middle : memory pressure (compact bar + total / available)
+ *   right  : precision + attribution
+ *
+ * Mounted at the app shell so it persists across every pane.
+ */
+export function StatusBar() {
+  const { memoryEstimate, device, precision } = useBoltz()
+  const palette = memoryEstimate
+    ? ({
+        idle: { fill: 'var(--ink-faded)', label: 'idle' },
+        green: { fill: '#3a7d4b', label: 'OK' },
+        yellow: { fill: '#b58a1e', label: 'TIGHT' },
+        red: { fill: 'var(--destructive)', label: 'OOM' },
+      } as const)[memoryEstimate.level]
+    : null
+  const pct = memoryEstimate
+    ? Math.min(memoryEstimate.pressureRatio, 1.5) / 1.5
+    : 0
+  return (
+    <div
+      className="flex items-center gap-3 border-t px-3 py-1 font-mono text-[10px] uppercase tracking-widest"
+      style={{
+        borderColor: 'var(--rule)',
+        color: 'var(--ink-faded)',
+        background: 'var(--card)',
+      }}
+    >
+      <span title={device?.reason ?? 'Detecting device…'}>
+        {device
+          ? `${device.tier}${device.webgpu ? ' · WebGPU' : ' · WASM only'}`
+          : 'Detecting device…'}
+      </span>
+
+      <span style={{ color: 'var(--rule)' }}>│</span>
+
+      <div className="flex flex-1 items-center gap-2">
+        <span style={{ minWidth: '4em' }}>
+          MEM {palette?.label ?? '—'}
+        </span>
+        <div
+          className="relative h-1.5 max-w-[260px] flex-1 overflow-hidden"
+          style={{ background: 'var(--rule)' }}
+          title={memoryEstimate?.reason}
+        >
+          {memoryEstimate && memoryEstimate.level !== 'idle' && (
+            <div
+              className="h-full transition-[width] duration-150"
+              style={{ width: `${pct * 100}%`, background: palette?.fill }}
+            />
+          )}
+          <div
+            className="absolute top-0 h-full w-px"
+            style={{
+              left: `${(0.9 / 1.5) * 100}%`,
+              background: 'var(--ink-faded)',
+              opacity: 0.5,
+            }}
+            aria-hidden
+          />
+        </div>
+        {memoryEstimate && memoryEstimate.level !== 'idle' && (
+          <span style={{ minWidth: '11em', textAlign: 'right' }}>
+            {formatBytes(memoryEstimate.totalBytes)} / {formatBytes(memoryEstimate.availableBytes)}
+          </span>
+        )}
+      </div>
+
+      <span style={{ color: 'var(--rule)' }}>│</span>
+
+      <span>precision · {precision}</span>
+
+      <span style={{ color: 'var(--rule)' }}>│</span>
+
+      <span style={{ color: 'var(--ink-faded)' }}>
+        Boltz-2 · Wohlwend et al. (MIT) · runs on your device
+      </span>
+    </div>
+  )
+}
+
 export function BoltzInput() {
-  const { fasta, setFasta, setStructure, setError } = useBoltz()
+  const {
+    fasta,
+    setFasta,
+    setStructure,
+    setError,
+    setMemoryEstimate,
+    setDevice: setSharedDevice,
+    setPrecisionMirror,
+  } = useBoltz()
   const [loadingExample, setLoadingExample] = useState(false)
-  const [precision, setPrecision] = useState<BoltzPrecision>(DEFAULT_PRECISION)
+  const [precision, setPrecisionLocal] = useState<BoltzPrecision>(DEFAULT_PRECISION)
+  // Wrap setPrecision so the store always mirrors the picker.
+  const setPrecision = (p: BoltzPrecision) => {
+    setPrecisionLocal(p)
+    setPrecisionMirror(p)
+  }
+  const [device, setDevice] = useState<DeviceCapabilities | null>(null)
+  // Once the user clicks a different precision than the autodetect picked,
+  // we stop updating the default — their choice wins.
+  const userPickedPrecision = useRef(false)
+  useEffect(() => {
+    let cancelled = false
+    detectDevice().then((d) => {
+      if (cancelled) return
+      setDevice(d)
+      setSharedDevice(d)
+      if (!userPickedPrecision.current) {
+        setPrecision(d.recommendedPrecision)
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Re-publish the memory estimate to the store on every render that
+  // could affect it. The StatusBar reads from the store, so this is the
+  // bridge from local state (fasta/precision/device) to the global rail.
+  useEffect(() => {
+    setMemoryEstimate(estimateMemory(fasta, precision, device))
+  }, [fasta, precision, device, setMemoryEstimate])
   const [uniprotAcc, setUniprotAcc] = useState('')
   const [uniprotLoading, setUniprotLoading] = useState(false)
   const [uniprotError, setUniprotError] = useState<string | null>(null)
@@ -873,25 +1039,48 @@ export function BoltzInput() {
           Precision
         </label>
         <div className="flex flex-col gap-1">
-          {PRECISIONS.map((p) => (
-            <label
-              key={p}
-              className="flex cursor-pointer items-center gap-2 border p-2 text-xs"
-              style={{
-                borderColor: precision === p ? 'var(--oxblood)' : 'var(--rule)',
-                background: precision === p ? 'var(--paper-mottle)' : 'transparent',
-              }}
-            >
-              <input
-                type="radio"
-                name="boltz-precision"
-                checked={precision === p}
-                onChange={() => setPrecision(p)}
-              />
-              <span style={{ color: 'var(--ink)' }}>{PRECISION_LABEL[p]}</span>
-            </label>
-          ))}
+          {PRECISIONS.map((p) => {
+            const isRecommended = device?.recommendedPrecision === p
+            return (
+              <label
+                key={p}
+                className="flex cursor-pointer items-center gap-2 border p-2 text-xs"
+                style={{
+                  borderColor: precision === p ? 'var(--oxblood)' : 'var(--rule)',
+                  background: precision === p ? 'var(--paper-mottle)' : 'transparent',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="boltz-precision"
+                  checked={precision === p}
+                  onChange={() => {
+                    userPickedPrecision.current = true
+                    setPrecision(p)
+                  }}
+                />
+                <span style={{ color: 'var(--ink)' }}>{PRECISION_LABEL[p]}</span>
+                {isRecommended && (
+                  <span
+                    className="ml-auto font-mono text-[9px] uppercase tracking-widest"
+                    style={{ color: 'var(--oxblood)' }}
+                    title={device?.reason}
+                  >
+                    ★ recommended
+                  </span>
+                )}
+              </label>
+            )
+          })}
         </div>
+        {device && (
+          <p
+            className="font-mono text-[9px] uppercase tracking-widest leading-snug"
+            style={{ color: 'var(--ink-faded)' }}
+          >
+            {device.reason}
+          </p>
+        )}
 
         {/* Precision change remounts the loader, disposing previous sessions. */}
         <EngineLoaderFor key={precision} precision={precision} />
@@ -1053,58 +1242,6 @@ function FeaturizerSelfCheck() {
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-function RepresentationToggle({
-  value,
-  onChange,
-}: {
-  value: MoleroRepresentation
-  onChange: (v: MoleroRepresentation) => void
-}) {
-  const items: { key: MoleroRepresentation; label: string; title: string }[] = [
-    { key: 'ball-stick', label: 'B+S',     title: 'Every atom + every bond — full atomic detail' },
-    { key: 'cartoon',    label: 'Cartoon', title: 'SS-aware ribbon only (sidechains return via selection)' },
-    { key: 'glass',      label: 'Glass',   title: 'SASA-modulated refractive shell only' },
-    { key: 'all',        label: 'All',     title: 'Cartoon composited inside the glass shell' },
-  ]
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Representation"
-      className="flex items-center gap-0 font-mono text-[10px] uppercase tracking-widest"
-      style={{ color: 'var(--ink-faded)' }}
-    >
-      <span style={{ marginRight: 8 }}>rep</span>
-      {items.map((it, i) => {
-        const active = value === it.key
-        return (
-          <button
-            key={it.key}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(it.key)}
-            title={it.title}
-            style={{
-              padding: '2px 10px',
-              border: '1px solid var(--rule)',
-              borderLeftWidth: i === 0 ? 1 : 0,
-              background: active ? 'var(--ink)' : 'transparent',
-              color: active ? 'var(--paper)' : 'var(--ink-faded)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10,
-              letterSpacing: '0.15em',
-              textTransform: 'uppercase',
-              cursor: 'pointer',
-            }}
-          >
-            {it.label}
-          </button>
-        )
-      })}
     </div>
   )
 }
@@ -1300,7 +1437,7 @@ function GlassSettingsPanel({
 
 export function BoltzCanvas() {
   const { structure, error } = useBoltz()
-  const [moleroRep, setMoleroRep] = useState<MoleroRepresentation>('cartoon')
+  const [layers, setLayers] = useState<MoleroLayers>(DEFAULT_LAYERS)
   const [glassPreset, setGlassPreset] = useState<GlassPreset>(BUNDLED_GLASS_PRESET)
   const [glassSaveState, setGlassSaveState] =
     useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -1337,25 +1474,28 @@ export function BoltzCanvas() {
       </div>
     )
   }
-  const showGlassPanel = moleroRep === 'glass' || moleroRep === 'all'
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-end">
-        <RepresentationToggle value={moleroRep} onChange={setMoleroRep} />
-      </div>
-      <MoleroViewer
-        structure={structure}
-        representation={moleroRep}
-        glassPreset={glassPreset}
-      />
-      {showGlassPanel && (
-        <GlassSettingsPanel
-          preset={glassPreset}
-          onChange={setGlassPreset}
-          onSave={saveGlassPreset}
-          onReset={() => setGlassPreset(BUNDLED_GLASS_PRESET)}
-          saveState={glassSaveState}
-        />
+      {USE_MOLERO ? (
+        <>
+          <MoleroViewer
+            structure={structure}
+            layers={layers}
+            onLayersChange={setLayers}
+            glassPreset={glassPreset}
+          />
+          {layers.surface && (
+            <GlassSettingsPanel
+              preset={glassPreset}
+              onChange={setGlassPreset}
+              onSave={saveGlassPreset}
+              onReset={() => setGlassPreset(BUNDLED_GLASS_PRESET)}
+              saveState={glassSaveState}
+            />
+          )}
+        </>
+      ) : (
+        <MolViewer structure={structure} />
       )}
     </div>
   )

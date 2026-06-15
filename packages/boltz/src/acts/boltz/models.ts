@@ -135,9 +135,22 @@ export function bundleApproxBytes(precision: BoltzPrecision): number {
 /** Pretty label for the precision picker. */
 export const PRECISION_LABEL: Record<BoltzPrecision, string> = {
   int8: 'int8 · 543 MB · default',
-  fp16: 'fp16 · 1.05 GB · near-PyTorch parity',
-  fp32: 'fp32 · 2.06 GB · debug / reference',
+  fp16: 'fp16 · 1.05 GB · post-alpha',
+  fp32: 'fp32 · 2.06 GB · reference',
 }
 
-export const PRECISIONS: readonly BoltzPrecision[] = ['int8', 'fp16', 'fp32']
+/**
+ * User-facing precision tiers.
+ *
+ * fp16 is intentionally absent for the alpha: the ONNX bundles exist
+ * (HF, latentspacecraft/boltz-2-onnx@v0.1/fp16/) and the worker loads
+ * them cleanly, but the TS orchestrator (`orchestrate.ts`) feeds and
+ * consumes fp32 buffers — fp16 needs a JS-side IEEE 754 half ↔ single
+ * pack/unpack at every graph boundary. We left the type, the size
+ * table, the manifest builder, and the featurizer's Uint16Array
+ * `float16` branch in place so re-enabling is a small slice (drop the
+ * tier back into this array, implement the pack/unpack in
+ * orchestrate.ts).
+ */
+export const PRECISIONS: readonly BoltzPrecision[] = ['int8', 'fp32']
 export const DEFAULT_PRECISION: BoltzPrecision = 'int8'

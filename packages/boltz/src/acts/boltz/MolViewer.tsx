@@ -1,51 +1,31 @@
 /**
- * MolViewer — headless Mol* embed, jewelry register.
+ * MolViewer — headless Mol\* embed, default register.
  *
- * Three Mol*-rendered representations on the metal armature:
- *   - putty wire (backbone, pLDDT-thickened metal filigree)
- *   - ball-and-stick on polymer (side chains as articulated metalwork)
- *   - ball-and-stick on ligand (geometric metal centerpiece)
+ * Strips the alpha-era jewelry treatment (gold putty + refractive gem
+ * shell). The canvas now shows Mol\*'s standard look — cartoon polymer,
+ * ball-and-stick ligands, chain-id coloring — with a compact toolbar
+ * exposing the controls users actually reach for:
  *
- * The gem shell is rendered by a separate Three.js overlay
- * (`RefractiveShell`) stacked on top of the Mol* canvas, because Mol*'s
- * material model has no IOR / transmission — it can't do real refraction.
- * The overlay polls Mol*'s camera state every frame and mirrors it onto
- * its own PerspectiveCamera, so orbiting Mol* drags the gem with it.
+ *   - Representation : cartoon | ball+stick | surface | spacefill
+ *   - Color theme    : chain-id | secondary-structure | b-factor | element
+ *   - Reset camera
+ *   - Screenshot     : PNG download via Mol\*'s viewport-screenshot helper
  *
- * The full parameter bundle for each metal lives in jewelry-presets.json
- * so the user can tweak in-app and write the final look back to that file
- * via the dev-only Vite middleware (see vite.config.ts).
+ * Mol\*'s built-in left/right control panels would give us many more knobs
+ * for free, but they bring in ~150 KB of UI bundle and don't match the
+ * Corundum chrome at all. The 30-line toolbar covers the daily-use 80%.
  *
- * Two effects on the Mol* side:
- *   - Effect 1 rebuilds reps on structure/metal/rep-affecting param changes.
- *   - Effect 2 applies cheap canvas3d-only props (bg, exposure, bloom,
- *     lighting) for smooth slider drag without geometry rebuild.
- *
- * Strict-mode safe: `cancelled` flag prevents orphan plugins on the
- * second mount-then-unmount cycle.
+ * The legacy refractive-shell + liquid-glass overlays + jewelry-presets
+ * file are kept on disk for now (re-importable if a future Molero-on
+ * mode wants them) but no longer wired through this component.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import 'molstar/build/viewer/molstar.css'
 
 import { DefaultPluginSpec } from 'molstar/lib/mol-plugin/spec'
 import { PluginContext } from 'molstar/lib/mol-plugin/context'
-import { Color } from 'molstar/lib/mol-util/color'
-
-import defaultPresets from './jewelry-presets.json'
-import { extractAtomPositions } from './atomParser'
-import {
-  LiquidGlass,
-  type CameraSnapshot,
-  type LiquidGlassParams,
-} from './LiquidGlass'
-import { RefractiveShell, type GemPreset } from './RefractiveShell'
-import { useGemShellStore } from './GemShellDrawer'
-import type { GemMaterialOpts } from '@/components/gemMaterial'
-
-// `sourceCanvas` is no longer needed — backdrop-filter reads the live
-// Mol* layer beneath this overlay automatically. Keeping the import path
-// stable in case we need the canvas ref for a future feature.
+import { PluginCommands } from 'molstar/lib/mol-plugin/commands'
 
 export type StructureFormat = 'pdb' | 'mmcif'
 
@@ -55,228 +35,38 @@ export interface StructurePayload {
   id: string
 }
 
-export type Metal = 'gold' | 'silver' | 'copper'
-export const METALS: readonly Metal[] = ['gold', 'silver', 'copper'] as const
-
-export interface JewelryPreset {
-  // Metal armature
-  color: number
-  metalness: number
-  roughness: number
-  emissive: number
-  // Scene (cheap — canvas3d only)
-  background: number
-  exposure: number
-  bloomStrength: number
-  bloomRadius: number
-  bloomThreshold: number
-  // Studio rig — five directional lights + ambient. Positions and
-  // colors are baked into STUDIO_LIGHT_LAYOUT below; only intensities
-  // are per-metal so you can soften silver, push gold, etc.
-  ambientIntensity: number
-  keyIntensity: number
-  fillIntensity: number
-  rimIntensity: number
-  topIntensity: number
-  bounceIntensity: number
-  // Wire (putty)
-  wireSizeFactor: number
-  wireBaseSize: number
-  wireBfactorFactor: number
-  // Side chains (ball-and-stick on polymer)
-  sideChainSizeFactor: number
-  sideChainAspectRatio: number
-  sideChainBondScale: number
-  // Ligand (ball-and-stick)
-  ligandSizeFactor: number
-  ligandAspectRatio: number
-  ligandBondScale: number
-  // Liquid-glass overlay — HTML element with CSS backdrop-filter clipped
-  // to the convex-hull silhouette of projected atoms.
-  shellBlur: number              // CSS px backdrop blur
-  shellBrightness: number        // 1.0 = neutral
-  shellSaturation: number        // 1.0 = neutral
-  shellEnvelopePad: number       // px to inflate the hull outward
-  shellSmoothIterations: number  // Chaikin smoothing passes (0 = sharp)
-  /** 0 = use metal color as tint. */
-  shellTintColor: number
-  shellTintAmount: number        // 0-1
-  shellEdgeHighlight: number     // 0-1 inner-rim alpha
-  shellEdgeWidth: number         // px box-shadow inner-rim radius
-}
-
-export type JewelryPresets = Record<Metal, JewelryPreset>
-
-export const BUNDLED_PRESETS: JewelryPresets = defaultPresets as JewelryPresets
-
-/**
- * Studio rig — 5 directional lights arranged for jewelry-case drama. The
- * metal armature is full PBR but Mol* has no environment map (verified:
- * no IBL in mol-gl/shader), so reflections only catch the lights we put
- * in the scene. A single key light gives one hot spot and dead matte
- * everywhere else; a multi-light rig fakes a polished-display case by
- * giving every facet a highlight to catch.
- *
- * Inclination is the angle from zenith (0° = directly above, 90° =
- * horizon, 180° = directly below). Azimuth rotates around the vertical
- * axis (0° = front).
- *
- *   key        — warm hot spot, upper-front-right; main facet highlight.
- *   fill       — cool soft light, upper-back-left; opens up shadows.
- *   rim        — neutral back-top; halo edge-light that separates the
- *                piece from the background.
- *   top        — neutral overhead; sparkle on horizontal facets.
- *   bounce     — warm under-glow; subtle metal warmth from below.
- *
- * Ambient is pulled to near zero so the rig does the work — jewelry
- * cases live or die by contrast.
- */
-type LightSlot = 'key' | 'fill' | 'rim' | 'top' | 'bounce'
-const STUDIO_LIGHT_LAYOUT: Record<
-  LightSlot,
-  { inclination: number; azimuth: number; color: number }
-> = {
-  key:    { inclination: 38,  azimuth: 35,  color: 0xfff0d0 },
-  fill:   { inclination: 62,  azimuth: 235, color: 0xcad8ff },
-  rim:    { inclination: 22,  azimuth: 175, color: 0xffffff },
-  top:    { inclination: 5,   azimuth: 0,   color: 0xfff5e6 },
-  bounce: { inclination: 148, azimuth: 0,   color: 0xffc18a },
-}
-const AMBIENT_COLOR = 0xffffff
-
 interface Props {
   structure: StructurePayload | null
-  metal?: Metal
-  /** Override the bundled presets (e.g. from a settings panel). */
-  presets?: JewelryPresets
-  /**
-   * Hide the (expensive) gem shell so per-frame rebuilds only redraw the
-   * cheap metal reps. Wire/sidechain/ligand tessellate in ~10-30 ms each
-   * for typical sizes, so the armature condenses at near-real-time.
-   * Shell crystallizes around the final structure once this flips false.
-   */
-  streaming?: boolean
-  /**
-   * Which gem-shell renderer to use on top of the Mol* canvas:
-   *   - 'glass' : CSS backdrop-filter overlay (LiquidGlass). Fast, no extra
-   *               WebGL context, but no real refraction.
-   *   - 'gem'   : Three.js MeshPhysicalMaterial shell (RefractiveShell).
-   *               Real transmission/IOR/dispersion, dedicated WebGL canvas
-   *               mirroring Mol*'s camera. Slightly heavier; matches the
-   *               wordmark logo's material register exactly.
-   *   - 'none'  : no shell overlay; only the Mol* metal armature renders.
-   * Defaults to 'gem' since we built the new register specifically for this.
-   */
-  shellMode?: 'glass' | 'gem' | 'none'
-  /** Gem preset for the 'gem' shellMode. Ignored otherwise. */
-  gemPreset?: GemPreset
   className?: string
 }
 
-function applyCanvas3d(plugin: PluginContext, p: JewelryPreset) {
-  const c3d = plugin.canvas3d
-  if (!c3d) return
-  c3d.setProps({
-    renderer: {
-      backgroundColor: Color(p.background),
-      exposure: p.exposure,
-      ambientColor: Color(AMBIENT_COLOR),
-      ambientIntensity: p.ambientIntensity,
-      light: (['key', 'fill', 'rim', 'top', 'bounce'] as const).map((slot) => {
-        const layout = STUDIO_LIGHT_LAYOUT[slot]
-        const intensityKey =
-          (slot + 'Intensity') as `${LightSlot}Intensity`
-        return {
-          inclination: layout.inclination,
-          azimuth: layout.azimuth,
-          color: Color(layout.color),
-          intensity: p[intensityKey],
-        }
-      }),
-    },
-    postprocessing: {
-      outline: { name: 'off', params: {} },
-      bloom: {
-        name: 'on',
-        params: {
-          strength: p.bloomStrength,
-          radius: p.bloomRadius,
-          threshold: p.bloomThreshold,
-          mode: 'emissive',
-        },
-      },
-    },
-  })
+type Representation = 'cartoon' | 'ball-and-stick' | 'gaussian-surface' | 'spacefill'
+type ColorTheme = 'chain-id' | 'secondary-structure' | 'uncertainty' | 'element-symbol'
+
+const REPRESENTATION_LABEL: Record<Representation, string> = {
+  cartoon: 'Cartoon',
+  'ball-and-stick': 'Ball+stick',
+  'gaussian-surface': 'Surface',
+  spacefill: 'Spacefill',
 }
 
-/**
- * Adapter: subscribes to the gem-shell tuning store and threads the resolved
- * params into RefractiveShell. Kept as a separate component so MolViewer's
- * own re-renders aren't triggered by every slider drag — only this thin
- * wrapper re-renders, and the shell's prop diff handles the rebuild.
- */
-function RefractiveShellFromStore({
-  atomPositions,
-  cameraSnapshot,
-  backdropCanvas,
-  width,
-  height,
-  fallbackPreset,
-}: {
-  atomPositions: Float32Array | null
-  cameraSnapshot: () => CameraSnapshot | null
-  backdropCanvas: HTMLCanvasElement | null
-  width: number
-  height: number
-  fallbackPreset: GemPreset
-}) {
-  const shape = useGemShellStore((s) => s.shape)
-  const presetFromStore = useGemShellStore((s) => s.preset)
-  const attenuationFactor = useGemShellStore((s) => s.attenuationFactor)
-  const padding = useGemShellStore((s) => s.padding)
-  const ior = useGemShellStore((s) => s.iorOverride)
-  const transmission = useGemShellStore((s) => s.transmissionOverride)
-  const roughness = useGemShellStore((s) => s.roughnessOverride)
-  const dispersion = useGemShellStore((s) => s.dispersionOverride)
-  const overrides: Partial<GemMaterialOpts> = {}
-  if (ior !== null) overrides.ior = ior
-  if (transmission !== null) overrides.transmission = transmission
-  if (roughness !== null) overrides.roughness = roughness
-  if (dispersion !== null) overrides.dispersion = dispersion
-  return (
-    <RefractiveShell
-      atomPositions={atomPositions}
-      cameraSnapshot={cameraSnapshot}
-      backdropCanvas={backdropCanvas}
-      width={width}
-      height={height}
-      shape={shape}
-      preset={presetFromStore ?? fallbackPreset}
-      attenuationFactor={attenuationFactor}
-      padding={padding}
-      materialOverrides={Object.keys(overrides).length ? overrides : undefined}
-    />
-  )
+const COLOR_LABEL: Record<ColorTheme, string> = {
+  'chain-id': 'Chain',
+  'secondary-structure': 'Secondary',
+  uncertainty: 'pLDDT',
+  'element-symbol': 'Element',
 }
 
-export function MolViewer({
-  structure,
-  metal = 'gold',
-  presets = BUNDLED_PRESETS,
-  streaming = false,
-  shellMode = 'gem',
-  gemPreset = 'ruby',
-  className,
-}: Props) {
+export function MolViewer({ structure, className }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const pluginRef = useRef<PluginContext | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
-  // Pixel size of the overlay canvas — measured from the container via
-  // ResizeObserver so the Three.js canvas always matches Mol*'s viewport.
-  const [overlaySize, setOverlaySize] = useState({ width: 0, height: 0 })
+  const [representation, setRepresentation] = useState<Representation>('cartoon')
+  const [colorTheme, setColorTheme] = useState<ColorTheme>('chain-id')
 
+  // Initialize Mol\* once. Strict-mode-safe via `cancelled` flag.
   useEffect(() => {
     let cancelled = false
     async function init() {
@@ -308,11 +98,7 @@ export function MolViewer({
     }
   }, [])
 
-  const preset = presets[metal]
-
-  // Effect 1 — structure + representations. Rebuilds on structure change,
-  // metal change, or any representation-affecting param change. Bloom /
-  // exposure / background ride on Effect 2 to keep drag smooth.
+  // (Re)build the structure + representations on structure / rep / theme change.
   useEffect(() => {
     const plugin = pluginRef.current
     if (!plugin || !ready || !structure) return
@@ -320,7 +106,6 @@ export function MolViewer({
     async function load() {
       try {
         await plugin!.clear()
-        applyCanvas3d(plugin!, preset)
 
         const data = await plugin!.builders.data.rawData({
           data: structure!.data,
@@ -336,100 +121,38 @@ export function MolViewer({
         if (cancelled) return
         const struct = await plugin!.builders.structure.createStructure(model)
         if (cancelled) return
+
+        // Polymer rep — user-chosen type + theme.
         const polymer = await plugin!.builders.structure.tryCreateComponentStatic(
           struct,
           'polymer',
         )
-        if (cancelled || !polymer) return
-
-        // Metal armature — putty wire. Thickness tracks pLDDT (B-factor).
-        await plugin!.builders.structure.representation.addRepresentation(
-          polymer,
-          {
-            type: 'putty',
-            typeParams: {
-              alpha: 1.0,
-              emissive: preset.emissive,
-              quality: 'high',
-              material: {
-                metalness: preset.metalness,
-                roughness: preset.roughness,
-                bumpiness: 0,
-              },
-              sizeFactor: preset.wireSizeFactor,
+        if (polymer && !cancelled) {
+          await plugin!.builders.structure.representation.addRepresentation(
+            polymer,
+            {
+              type: representation,
+              color: colorTheme,
             },
-            color: 'uniform',
-            colorParams: { value: Color(preset.color) } as any,
-            size: 'uncertainty',
-            sizeParams: {
-              bfactorFactor: preset.wireBfactorFactor,
-              baseSize: preset.wireBaseSize,
-            } as any,
-          },
-          { tag: 'jewel-wire' },
-        )
-        if (cancelled) return
+          )
+        }
 
-        // Side chains as fine articulated metalwork (covers backbone too;
-        // the putty wire dominates that visually).
-        await plugin!.builders.structure.representation.addRepresentation(
-          polymer,
-          {
-            type: 'ball-and-stick',
-            typeParams: {
-              alpha: 1.0,
-              emissive: preset.emissive,
-              quality: 'high',
-              material: {
-                metalness: preset.metalness,
-                roughness: preset.roughness,
-                bumpiness: 0,
-              },
-              sizeFactor: preset.sideChainSizeFactor,
-              sizeAspectRatio: preset.sideChainAspectRatio,
-              bondScale: preset.sideChainBondScale,
-            },
-            color: 'uniform',
-            colorParams: { value: Color(preset.color) } as any,
-          },
-          { tag: 'jewel-side-chains' },
-        )
-        if (cancelled) return
-
-        // Ligands — slightly heavier so cofactors read as centerpiece.
+        // Ligand rep — always ball-and-stick (cartoon doesn't apply to
+        // small molecules), color by element by default so cofactors
+        // read as chemical structure rather than a chain-tinted blob.
         const ligand = await plugin!.builders.structure.tryCreateComponentStatic(
           struct,
           'ligand',
         )
-        if (cancelled) return
-        if (ligand) {
+        if (ligand && !cancelled) {
           await plugin!.builders.structure.representation.addRepresentation(
             ligand,
             {
               type: 'ball-and-stick',
-              typeParams: {
-                alpha: 1.0,
-                emissive: preset.emissive,
-                quality: 'high',
-                material: {
-                  metalness: preset.metalness,
-                  roughness: preset.roughness,
-                  bumpiness: 0,
-                },
-                sizeFactor: preset.ligandSizeFactor,
-                sizeAspectRatio: preset.ligandAspectRatio,
-                bondScale: preset.ligandBondScale,
-              },
-              color: 'uniform',
-              colorParams: { value: Color(preset.color) } as any,
+              color: 'element-symbol',
             },
-            { tag: 'jewel-ligand' },
           )
-          if (cancelled) return
         }
-
-        // Gem shell is handled by the RefractiveShell overlay below — Mol*
-        // has no IOR / transmission so it can't render real refraction.
       } catch (e) {
         console.error('[MolViewer] structure load failed:', e)
         if (e instanceof Error) console.error('[MolViewer] stack:', e.stack)
@@ -440,176 +163,197 @@ export function MolViewer({
     return () => {
       cancelled = true
     }
-  }, [
-    structure,
-    ready,
-    metal,
-    streaming,
-    preset.color,
-    preset.metalness,
-    preset.roughness,
-    preset.emissive,
-    preset.wireSizeFactor,
-    preset.wireBaseSize,
-    preset.wireBfactorFactor,
-    preset.sideChainSizeFactor,
-    preset.sideChainAspectRatio,
-    preset.sideChainBondScale,
-    preset.ligandSizeFactor,
-    preset.ligandAspectRatio,
-    preset.ligandBondScale,
-  ])
+  }, [structure, ready, representation, colorTheme])
 
-  // Effect 2 — cheap canvas3d updates. Smooth slider drag.
-  useEffect(() => {
+  const resetCamera = () => {
     const plugin = pluginRef.current
-    if (!plugin || !ready) return
-    applyCanvas3d(plugin, preset)
-  }, [
-    ready,
-    preset.background,
-    preset.exposure,
-    preset.bloomStrength,
-    preset.bloomRadius,
-    preset.bloomThreshold,
-    preset.ambientIntensity,
-    preset.keyIntensity,
-    preset.fillIntensity,
-    preset.rimIntensity,
-    preset.topIntensity,
-    preset.bounceIntensity,
-  ])
+    if (!plugin) return
+    void PluginCommands.Camera.Reset(plugin, {})
+  }
 
-  // Track container size so the Three.js overlay canvas matches the Mol*
-  // canvas pixel-for-pixel. ResizeObserver fires on parent layout changes
-  // (window resize, panel collapse, drawer open) without polling.
-  useLayoutEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-    const measure = () => {
-      const r = container.getBoundingClientRect()
-      setOverlaySize({ width: Math.max(1, r.width), height: Math.max(1, r.height) })
+  const screenshot = async () => {
+    const plugin = pluginRef.current
+    if (!plugin) return
+    try {
+      const helper = plugin.helpers.viewportScreenshot
+      if (!helper) {
+        console.warn('[MolViewer] no viewportScreenshot helper available')
+        return
+      }
+      const uri = await helper.getImageDataUri()
+      const a = document.createElement('a')
+      a.href = uri
+      a.download = `${structure?.id ?? 'structure'}.png`
+      a.click()
+    } catch (e) {
+      console.error('[MolViewer] screenshot failed:', e)
     }
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(container)
-    return () => ro.disconnect()
-  }, [])
-
-  // Atom positions for the refractive shell — parsed once per structure
-  // change. ~50-200μs for typical sizes; memoization avoids re-parsing
-  // when only material/lighting sliders move.
-  const atomPositions = useMemo(() => {
-    if (!structure) return null
-    return extractAtomPositions(structure.data, structure.format)
-  }, [structure])
-
-  // Camera snapshot getter — stable reference, called by the overlay's
-  // animation loop each frame. Reads Mol*'s live camera state.
-  const cameraSnapshot = useCallback((): CameraSnapshot | null => {
-    const cam = pluginRef.current?.canvas3d?.camera
-    if (!cam) return null
-    const s = cam.state
-    return {
-      fov: s.fov,
-      position: [s.position[0], s.position[1], s.position[2]],
-      up: [s.up[0], s.up[1], s.up[2]],
-      target: [s.target[0], s.target[1], s.target[2]],
-    }
-  }, [])
-
-  const glassParams: LiquidGlassParams = useMemo(
-    () => ({
-      blur: preset.shellBlur,
-      brightness: preset.shellBrightness,
-      saturation: preset.shellSaturation,
-      envelopePad: preset.shellEnvelopePad,
-      smoothIterations: preset.shellSmoothIterations,
-      // 0 is the sentinel for "tint by metal color" so the silhouette
-      // always reads as the current metal unless overridden explicitly.
-      tintColor: preset.shellTintColor || preset.color,
-      tintAmount: preset.shellTintAmount,
-      edgeHighlight: preset.shellEdgeHighlight,
-      edgeWidth: preset.shellEdgeWidth,
-    }),
-    [
-      preset.shellBlur,
-      preset.shellBrightness,
-      preset.shellSaturation,
-      preset.shellEnvelopePad,
-      preset.shellSmoothIterations,
-      preset.shellTintColor,
-      preset.shellTintAmount,
-      preset.shellEdgeHighlight,
-      preset.shellEdgeWidth,
-      preset.color,
-    ],
-  )
-
-  // Hide the glass during streaming so the metal armature condensation
-  // shows clean. Reappears when `streaming` flips false on the last frame.
-  const shellAtoms = streaming ? null : atomPositions
+  }
 
   return (
-    <div
-      ref={containerRef}
-      className={className}
-      style={{
-        position: 'relative',
-        width: '100%',
-        aspectRatio: '4 / 3',
-        minHeight: 320,
-        border: '1px solid var(--rule)',
-        background: 'var(--paper-mottle)',
-        overflow: 'hidden',
-      }}
-    >
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          width: '100%',
-          height: '100%',
-          display: 'block',
-        }}
+    <div className={className} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <Toolbar
+        representation={representation}
+        onRepresentationChange={setRepresentation}
+        colorTheme={colorTheme}
+        onColorThemeChange={setColorTheme}
+        onResetCamera={resetCamera}
+        onScreenshot={screenshot}
+        disabled={!structure}
       />
-      {overlaySize.width > 0 && overlaySize.height > 0 && shellMode === 'glass' && (
-        <LiquidGlass
-          atomPositions={shellAtoms}
-          cameraSnapshot={cameraSnapshot}
-          params={glassParams}
-          width={overlaySize.width}
-          height={overlaySize.height}
-        />
-      )}
-      {overlaySize.width > 0 && overlaySize.height > 0 && shellMode === 'gem' && (
-        <RefractiveShellFromStore
-          atomPositions={shellAtoms}
-          cameraSnapshot={cameraSnapshot}
-          backdropCanvas={canvasRef.current}
-          width={overlaySize.width}
-          height={overlaySize.height}
-          fallbackPreset={gemPreset}
-        />
-      )}
-      {error && (
-        <div
+      <div
+        ref={containerRef}
+        style={{
+          position: 'relative',
+          width: '100%',
+          aspectRatio: '4 / 3',
+          minHeight: 320,
+          border: '1px solid var(--rule)',
+          background: 'var(--paper-mottle)',
+          overflow: 'hidden',
+        }}
+      >
+        <canvas
+          ref={canvasRef}
           style={{
             position: 'absolute',
             inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--destructive)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12,
-            background: 'var(--paper)',
+            width: '100%',
+            height: '100%',
+            display: 'block',
           }}
-        >
-          Viewer: {error}
-        </div>
-      )}
+        />
+        {error && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--destructive)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              background: 'var(--paper)',
+            }}
+          >
+            Viewer: {error}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Compact controls strip above the viewport. Two segmented switchers
+ * (representation, color theme) + two icon-like buttons (reset, PNG).
+ * Disabled until a structure is loaded so users don't fire commands
+ * into an empty scene.
+ */
+function Toolbar({
+  representation,
+  onRepresentationChange,
+  colorTheme,
+  onColorThemeChange,
+  onResetCamera,
+  onScreenshot,
+  disabled,
+}: {
+  representation: Representation
+  onRepresentationChange: (r: Representation) => void
+  colorTheme: ColorTheme
+  onColorThemeChange: (c: ColorTheme) => void
+  onResetCamera: () => void
+  onScreenshot: () => void
+  disabled: boolean
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1 border p-1 font-mono text-[10px] uppercase tracking-widest"
+      style={{
+        borderColor: 'var(--rule)',
+        background: 'var(--card)',
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <span style={{ color: 'var(--ink-faded)', paddingInline: 4 }}>Rep</span>
+      <Segmented
+        value={representation}
+        options={Object.keys(REPRESENTATION_LABEL) as Representation[]}
+        label={(v) => REPRESENTATION_LABEL[v]}
+        onChange={onRepresentationChange}
+        disabled={disabled}
+      />
+      <span style={{ color: 'var(--rule)' }}>│</span>
+      <span style={{ color: 'var(--ink-faded)', paddingInline: 4 }}>Color</span>
+      <Segmented
+        value={colorTheme}
+        options={Object.keys(COLOR_LABEL) as ColorTheme[]}
+        label={(v) => COLOR_LABEL[v]}
+        onChange={onColorThemeChange}
+        disabled={disabled}
+      />
+      <span style={{ color: 'var(--rule)', flex: '1 0 auto' }} />
+      <button
+        type="button"
+        onClick={onResetCamera}
+        disabled={disabled}
+        className="border px-2 py-0.5"
+        style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+        title="Reset camera"
+      >
+        ⟳ camera
+      </button>
+      <button
+        type="button"
+        onClick={onScreenshot}
+        disabled={disabled}
+        className="border px-2 py-0.5"
+        style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+        title="Download PNG"
+      >
+        ⤓ png
+      </button>
+    </div>
+  )
+}
+
+function Segmented<T extends string>({
+  value,
+  options,
+  label,
+  onChange,
+  disabled,
+}: {
+  value: T
+  options: T[]
+  label: (v: T) => string
+  onChange: (v: T) => void
+  disabled: boolean
+}) {
+  return (
+    <div className="flex">
+      {options.map((opt) => {
+        const active = opt === value
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(opt)}
+            disabled={disabled}
+            className="border px-2 py-0.5"
+            style={{
+              borderColor: active ? 'var(--oxblood)' : 'var(--rule)',
+              background: active ? 'var(--paper-mottle)' : 'transparent',
+              color: active ? 'var(--ink)' : 'var(--ink-faded)',
+              marginLeft: -1,
+            }}
+          >
+            {label(opt)}
+          </button>
+        )
+      })}
     </div>
   )
 }

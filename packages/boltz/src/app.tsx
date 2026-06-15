@@ -1,22 +1,33 @@
 /**
- * App shell — two columns: input on the left, canvas takes the rest.
+ * App shell — Photoshop 7.0 register.
  *
- *   ┌───────────┬──────────────────────────────────────────┐
- *   │  Input    │            Canvas (Molero)               │
- *   │  (FASTA,  │                                          │
- *   │  predict) │                                          │
- *   └───────────┴──────────────────────────────────────────┘
- *   ▶ WebGPU debug
+ *   ┌───────────────────────────────────────────────────────┐
+ *   │  Top bar  : Logo + title + version                    │
+ *   ├───────────┬───────────────────────────────────────────┤
+ *   │ Options   │             Canvas (Mol\*)                │
+ *   │ (left     │                                           │
+ *   │ vertical, │                                           │
+ *   │ 340px)    │                                           │
+ *   ├───────────┴───────────────────────────────────────────┤
+ *   │ Status bar : device · memory · precision · attribution│
+ *   └───────────────────────────────────────────────────────┘
+ *   ▶ WebGPU debug (overlay)
  *
  * The legacy Output pane (mmCIF stats / provenance) was pulled when the
  * canvas became the entire story; nothing it surfaced wasn't already
- * captured by the console + the act's predict-panel status line. The
- * Mol* viewer is also gone — Molero is the sole renderer now.
+ * captured by the console + the act's predict-panel status line. Mol\*
+ * is the alpha-default renderer (Molero gates behind VITE_USE_MOLERO=1
+ * in BoltzAct). The footer attribution moved into the status bar.
  */
-import { BoltzCanvas, BoltzInput } from './acts/boltz/BoltzAct'
+import { BoltzCanvas, BoltzInput, StatusBar } from './acts/boltz/BoltzAct'
 import { LigandDrawer } from './acts/boltz/LigandDrawer'
-import { GemShellDrawer } from './acts/boltz/GemShellDrawer'
+// GemShellDrawer is deprecated for the alpha — its controls (gem-shell
+// material, refractive overlay) were the Molero-era visual exploration.
+// With Mol\* as the default renderer, surfacing those knobs to alpha users
+// just confuses the UX. File kept on disk; re-import if Molero re-enables.
+// import { GemShellDrawer } from './acts/boltz/GemShellDrawer'
 import { WebGpuDebug } from './debug/WebGpuDebug'
+import { MemoryProbe } from './debug/MemoryProbe'
 import { GemLogo } from './components/GemLogo'
 
 export function App() {
@@ -64,16 +75,11 @@ export function App() {
         </Pane>
       </main>
 
-      <LigandDrawer />
-      <GemShellDrawer />
-      <WebGpuDebug />
+      <StatusBar />
 
-      <footer
-        className="border-t px-6 py-2 font-mono text-[10px] uppercase tracking-widest"
-        style={{ borderColor: 'var(--rule)', color: 'var(--ink-faded)' }}
-      >
-        Boltz-2 weights © Wohlwend et al. (MIT) · served by HuggingFace · runs on your device
-      </footer>
+      <LigandDrawer />
+      <MemoryProbe />
+      <WebGpuDebug />
     </div>
   )
 }
