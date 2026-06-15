@@ -20,22 +20,6 @@ function jewelryPresetSavePlugin(): Plugin {
   )
 }
 
-/**
- * Dev-only endpoint: POST /__save_glass_preset writes to
- * ../molero/src/glass-preset.json — the bundled preset that lives
- * inside the standalone Molero package (consumed here as a workspace
- * dep). Hot-edits to that file flow back into the running session via
- * Vite's watch graph.
- */
-function glassPresetSavePlugin(): Plugin {
-  return makePresetSavePlugin(
-    'corundum-glass-preset-save',
-    '/__save_glass_preset',
-    '../molero/src/glass-preset.json',
-    'glass-preset',
-  )
-}
-
 /** Shared body of the preset-save plugins — they only differ by URL +
  *  target file + log tag. */
 function makePresetSavePlugin(
@@ -102,7 +86,6 @@ export default defineConfig({
     // qualify even on private IPs — other devices need https://<lan-ip>.
     basicSsl(),
     jewelryPresetSavePlugin(),
-    glassPresetSavePlugin(),
   ],
   resolve: {
     alias: {
