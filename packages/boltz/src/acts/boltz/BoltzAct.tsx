@@ -35,7 +35,12 @@ import { predict, type ProgressEvent } from './orchestrate'
 import { writeMmcif } from './mmcif'
 import { validateAgainstGolden, type ValidationReport } from './featurizer/validate'
 import { featurizeChains, parseFasta, type ParsedChain } from './featurizer'
-import { loadLigandBlob, type LigandBlob } from './featurizer/ligand'
+import {
+  loadLigandBlob,
+  loadLigandBlobFromSmiles,
+  type LigandBlob,
+} from './featurizer/ligand'
+import { renderLigandSvg } from './ligandSvg'
 import { useLigandInsertSlot, useLigandDrawer } from './LigandDrawer'
 
 interface BoltzActState {
@@ -239,7 +244,65 @@ function SequencesSection({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Ligands input — text input + chip list, with browse link to the modal.
+// Ligands input — accepts a CCD code OR a SMILES string. SMILES are
+// preprocessed server-side into the same blob shape (RDKit ETKDG + bounds),
+// previewed inline as a 2D structure so the user can confirm the molecule, and
+// inserted as a `>name ligand smiles` block.
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// Cached set of shipped CCD codes — used to disambiguate "is this 3-5 char
+// token a CCD code or a (short) SMILES?". Anything not in the set is treated
+// as SMILES and routed to the preprocessing endpoint.
+let ccdSetPromise: Promise<Set<string>> | null = null
+function loadCcdCodeSet(): Promise<Set<string>> {
+  if (!ccdSetPromise) {
+    ccdSetPromise = fetch('/ccd/index.json')
+      .then((r) => (r.ok ? r.json() : { entries: [] }))
+      .then(
+        (d: { entries?: { ccd: string }[] }) =>
+          new Set((d.entries ?? []).map((e) => e.ccd.toUpperCase())),
+      )
+      .catch(() => new Set<string>())
+  }
+  return ccdSetPromise
+}
+
+const looksLikeCcd = (t: string, ccdSet: Set<string>) =>
+  /^[A-Za-z0-9]{1,5}$/.test(t) && ccdSet.has(t.toUpperCase())
+
+type LigPreview =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ccd'; input: string; code: string; blob: LigandBlob }
+  | { status: 'smiles'; input: string; code: string; canonical: string; blob: LigandBlob }
+  | { status: 'error'; input: string; error: string }
+
+// Small structure thumbnail for a committed ligand chip. Resolves the blob the
+// same way prediction will (CCD fetch vs SMILES endpoint), so a green chip
+// means "this will actually featurize".
+function LigandChipThumb({ chain, size = 26 }: { chain: ParsedChain; size?: number }) {
+  const [svg, setSvg] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const p =
+      chain.ligandFormat === 'smiles'
+        ? loadLigandBlobFromSmiles(chain.sequence).then((r) => r.blob)
+        : loadLigandBlob(chain.sequence.toUpperCase())
+    p.then((b) => !cancelled && setSvg(renderLigandSvg(b, size))).catch(
+      () => !cancelled && setSvg(''),
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [chain.sequence, chain.ligandFormat, size])
+  return (
+    <span
+      style={{ width: size, height: size, flexShrink: 0, display: 'inline-block' }}
+      dangerouslySetInnerHTML={svg ? { __html: svg } : undefined}
+    />
+  )
+}
 
 function LigandsSection({
   fasta,
@@ -251,35 +314,106 @@ function LigandsSection({
   ligandChains: ParsedChain[]
 }) {
   const [draft, setDraft] = useState('')
+  const [preview, setPreview] = useState<LigPreview>({ status: 'idle' })
+  const [ccdSet, setCcdSet] = useState<Set<string>>(() => new Set())
   const setLigandInsert = useLigandInsertSlot((s) => s.setInsert)
   const openDrawer = useLigandDrawer((s) => s.setOpen)
 
-  const addLigand = useCallback(
-    (raw: string) => {
-      const code = raw.trim().toUpperCase()
-      if (!code) return
-      // De-dup: skip if the same ligand chain is already in the input.
-      const re = new RegExp(`^>\\S+\\s+ligand\\s*\\r?\\n${code}\\b`, 'mi')
+  useEffect(() => {
+    loadCcdCodeSet().then(setCcdSet)
+  }, [])
+
+  const insertCcd = useCallback(
+    (code: string) => {
+      const re = new RegExp(`^>\\S+\\s+ligand\\s*\\r?\\n${escapeRe(code)}\\b`, 'mi')
       if (re.test(fasta)) return
       const chunk = `>lig_${code} ligand\n${code}`
-      const next = fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`
-      setFasta(next)
+      setFasta(fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`)
     },
     [fasta, setFasta],
   )
 
-  // Re-register the drawer's pick-a-ligand slot on every fasta change so it
-  // always closes over the latest value (avoids stale-closure dedup checks).
+  const insertSmiles = useCallback(
+    (smiles: string, code: string) => {
+      // De-dup on the exact SMILES body line.
+      if (fasta.split(/\r?\n/).some((l) => l.trim() === smiles)) return
+      const chunk = `>lig_${code} ligand smiles\n${smiles}`
+      setFasta(fasta.trim() ? `${fasta.trim()}\n${chunk}\n` : `${chunk}\n`)
+    },
+    [fasta, setFasta],
+  )
+
+  // The drawer's pick-a-ligand slot only ever inserts CCD codes.
   useEffect(() => {
-    setLigandInsert((ccd) => addLigand(ccd))
+    setLigandInsert((ccd) => insertCcd(ccd.toUpperCase()))
     return () => setLigandInsert(null)
-  }, [addLigand, setLigandInsert])
+  }, [insertCcd, setLigandInsert])
+
+  // Debounced live inspector: resolve the draft to a 2D structure so the user
+  // can eyeball that the SMILES is the molecule they meant before committing.
+  useEffect(() => {
+    const t = draft.trim()
+    if (!t) {
+      setPreview({ status: 'idle' })
+      return
+    }
+    let cancelled = false
+    const handle = setTimeout(async () => {
+      setPreview({ status: 'loading' })
+      try {
+        if (looksLikeCcd(t, ccdSet)) {
+          const code = t.toUpperCase()
+          const blob = await loadLigandBlob(code)
+          if (!cancelled) setPreview({ status: 'ccd', input: t, code, blob })
+        } else {
+          const r = await loadLigandBlobFromSmiles(t)
+          if (!cancelled)
+            setPreview({
+              status: 'smiles',
+              input: t,
+              code: r.code,
+              canonical: r.canonicalSmiles,
+              blob: r.blob,
+            })
+        }
+      } catch (e) {
+        if (!cancelled) setPreview({ status: 'error', input: t, error: (e as Error).message })
+      }
+    }, 450)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [draft, ccdSet])
+
+  const commit = useCallback(async () => {
+    const t = draft.trim()
+    if (!t) return
+    try {
+      if (looksLikeCcd(t, ccdSet)) {
+        const code = t.toUpperCase()
+        await loadLigandBlob(code) // warm + validate (cached)
+        insertCcd(code)
+      } else {
+        const r = await loadLigandBlobFromSmiles(t) // cached after preview
+        insertSmiles(t, r.code)
+      }
+      setDraft('')
+      setPreview({ status: 'idle' })
+    } catch (e) {
+      setPreview({ status: 'error', input: t, error: (e as Error).message })
+    }
+  }, [draft, ccdSet, insertCcd, insertSmiles])
 
   const removeLigand = (chain: ParsedChain) => {
-    const code = chain.sequence.toUpperCase()
-    const name = chain.name || `lig_${code}`
-    // Remove the `>name ligand\nCODE\n` block. Tolerate optional extra blank lines.
-    const re = new RegExp(`>${name}\\s+ligand\\s*\\r?\\n${code}\\s*\\r?\\n?`, 'i')
+    const name = chain.name || `lig_${chain.sequence}`
+    const body = chain.sequence
+    // `>name … (ligand[ smiles] …)\n<body>\n` — escape both (SMILES bodies and
+    // generated names carry regex metacharacters).
+    const re = new RegExp(
+      `>${escapeRe(name)}[^\\n]*\\r?\\n${escapeRe(body)}\\s*\\r?\\n?`,
+      'i',
+    )
     setFasta(fasta.replace(re, '').replace(/\n{3,}/g, '\n\n'))
   }
 
@@ -294,50 +428,64 @@ function LigandsSection({
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
-              addLigand(draft)
-              setDraft('')
+              void commit()
             }
           }}
-          placeholder="CCD code (e.g. HEM, ATP, ZN)"
+          placeholder="CCD code or SMILES (e.g. ATP, c1ccccc1)"
           spellCheck={false}
-          className="flex-1 border px-2 py-1 font-mono text-xs uppercase tracking-wide"
+          className="flex-1 border px-2 py-1 font-mono text-xs tracking-wide"
           style={{
             borderColor: 'var(--rule)',
             background: 'var(--background)',
             color: 'var(--ink)',
           }}
         />
-        <ChipButton
-          onClick={() => {
-            addLigand(draft)
-            setDraft('')
-          }}
-        >
-          + Add
-        </ChipButton>
+        <ChipButton onClick={() => void commit()}>+ Add</ChipButton>
       </div>
+
+      {/* Live 2D inspector for the current draft. */}
+      <LigandInspector preview={preview} />
+
       {ligandChains.length > 0 && (
         <div className="flex flex-wrap gap-1">
-          {ligandChains.map((c, i) => (
-            <span
-              key={`${c.name}-${i}`}
-              className="flex items-center gap-1.5 border px-2 py-0.5 text-xs"
-              style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
-            >
-              <span className="font-mono uppercase tracking-wide">
-                {c.sequence.toUpperCase()}
-              </span>
-              <button
-                type="button"
-                onClick={() => removeLigand(c)}
-                aria-label={`Remove ${c.sequence}`}
-                title="Remove"
-                style={{ color: 'var(--ink-faded)', fontSize: 14, lineHeight: 1 }}
+          {ligandChains.map((c, i) => {
+            const isSmiles = c.ligandFormat === 'smiles'
+            const label = isSmiles
+              ? c.sequence.length > 22
+                ? `${c.sequence.slice(0, 21)}…`
+                : c.sequence
+              : c.sequence.toUpperCase()
+            return (
+              <span
+                key={`${c.name}-${i}`}
+                className="flex items-center gap-1.5 border px-1.5 py-0.5 text-xs"
+                style={{ borderColor: 'var(--rule)', color: 'var(--ink)' }}
+                title={isSmiles ? `SMILES: ${c.sequence}` : `CCD: ${c.sequence.toUpperCase()}`}
               >
-                ×
-              </button>
-            </span>
-          ))}
+                <LigandChipThumb chain={c} />
+                <span className={`font-mono tracking-wide${isSmiles ? '' : ' uppercase'}`}>
+                  {label}
+                </span>
+                {isSmiles && (
+                  <span
+                    className="rounded px-1 text-[9px] uppercase"
+                    style={{ background: 'var(--paper-mottle)', color: 'var(--ink-faded)' }}
+                  >
+                    smiles
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeLigand(c)}
+                  aria-label={`Remove ${c.sequence}`}
+                  title="Remove"
+                  style={{ color: 'var(--ink-faded)', fontSize: 14, lineHeight: 1 }}
+                >
+                  ×
+                </button>
+              </span>
+            )
+          })}
         </div>
       )}
       <button
@@ -349,6 +497,56 @@ function LigandsSection({
         Browse cofactor library →
       </button>
     </section>
+  )
+}
+
+// Inline structure preview shown beneath the ligand input as the user types.
+function LigandInspector({ preview }: { preview: LigPreview }) {
+  if (preview.status === 'idle') return null
+  const box = {
+    borderColor: 'var(--rule)',
+    background: 'var(--background)',
+    color: 'var(--ink)',
+  }
+  if (preview.status === 'loading') {
+    return (
+      <div className="border px-2 py-1.5 text-xs" style={{ ...box, color: 'var(--ink-faded)' }}>
+        Resolving structure…
+      </div>
+    )
+  }
+  if (preview.status === 'error') {
+    return (
+      <div
+        className="border px-2 py-1.5 font-mono text-[11px]"
+        style={{ borderColor: 'var(--oxblood)', background: 'var(--background)', color: 'var(--oxblood)' }}
+      >
+        {preview.error}
+      </div>
+    )
+  }
+  const svg = renderLigandSvg(preview.blob, 72)
+  const isSmiles = preview.status === 'smiles'
+  return (
+    <div className="flex items-center gap-2 border px-2 py-1.5" style={box}>
+      <span
+        style={{ width: 72, height: 72, flexShrink: 0, display: 'inline-block', background: 'var(--paper-mottle)' }}
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      <div className="flex min-w-0 flex-col gap-0.5 text-xs">
+        <span className="font-mono" style={{ color: 'var(--ink)' }}>
+          {isSmiles ? `${preview.code} · ${preview.blob.num_atoms} atoms` : preview.code}
+        </span>
+        {isSmiles && (
+          <span className="truncate font-mono text-[11px]" style={{ color: 'var(--ink-faded)' }} title={preview.canonical}>
+            {preview.canonical}
+          </span>
+        )}
+        <span className="text-[11px]" style={{ color: 'var(--ink-faded)' }}>
+          {isSmiles ? 'Custom SMILES ligand — press Add to include' : 'CCD cofactor — press Add to include'}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -455,7 +653,11 @@ function RunRail({
       const withBlobs = await Promise.all(
         chains.map(async (c) => {
           if (c.type !== 'ligand') return c
-          const blob: LigandBlob = await loadLigandBlob(c.sequence)
+          // SMILES ligands preprocess server-side; CCD ligands fetch a blob.
+          const blob: LigandBlob =
+            c.ligandFormat === 'smiles'
+              ? (await loadLigandBlobFromSmiles(c.sequence)).blob
+              : await loadLigandBlob(c.sequence)
           return { ...c, blob }
         }),
       )
@@ -724,10 +926,14 @@ export function BoltzInput() {
   } catch (e) {
     parseError = (e as Error).message
   }
-  const cleaned = chains.map((c) => ({
-    ...c,
-    sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase(),
-  }))
+  const cleaned = chains.map((c) =>
+    // Polymer chains: strip non-letters + upper-case (residue alphabet).
+    // Ligand chains: keep the body verbatim — CCD codes carry digits (B12)
+    // and SMILES are case-sensitive (c1ccccc1 ≠ C1CCCCC1).
+    c.type === 'ligand'
+      ? c
+      : { ...c, sequence: c.sequence.replace(/[^A-Za-z]/g, '').toUpperCase() },
+  )
   const polymerChains = cleaned.filter((c) => c.type !== 'ligand')
   const ligandChains = cleaned.filter((c) => c.type === 'ligand')
   const polymerLen = polymerChains.reduce((acc, c) => acc + c.sequence.length, 0)

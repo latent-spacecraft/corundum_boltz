@@ -42,12 +42,19 @@ import type { LigandBlob } from './ligand'
 // `featurizeChains(chains)` directly.
 
 export interface ChainInput {
-  /** For protein/RNA/DNA: residue letter string. For ligand: CCD 3-letter code. */
+  /** For protein/RNA/DNA: residue letter string. For a CCD ligand: the
+   *  3-letter code. For a SMILES ligand: the raw SMILES string (case-sensitive
+   *  — never upper-cased). */
   sequence: string
   /** Entity type. Protein, RNA, DNA, or ligand (NONPOLYMER). */
   type: ChainType
-  /** Required for `type: 'ligand'`. Loaded via loadLigandBlob() before
-   *  featurizeChains is called. Unused for polymer chains. */
+  /** How a `type: 'ligand'` chain's `sequence` should be resolved to a blob:
+   *  'ccd' (default) → fetch /ccd/<code>.json; 'smiles' → preprocess via the
+   *  SMILES endpoint. Ignored for polymer chains. */
+  ligandFormat?: 'ccd' | 'smiles'
+  /** Required for `type: 'ligand'`. Loaded via loadLigandBlob() /
+   *  loadLigandBlobFromSmiles() before featurizeChains is called. Unused for
+   *  polymer chains. */
   blob?: LigandBlob
 }
 

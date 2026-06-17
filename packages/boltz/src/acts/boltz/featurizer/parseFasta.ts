@@ -107,6 +107,14 @@ function parseHeader(line: string): ParsedChain {
   // Look for an optional type tag in the second token.
   if (tokens.length >= 2 && KNOWN_TYPES.has(tokens[1].toLowerCase() as ChainType)) {
     const type = tokens[1].toLowerCase() as ChainType
+    // `>name ligand smiles` marks the body as a SMILES string (preprocessed
+    // via the endpoint) rather than a CCD code.
+    if (type === 'ligand' && tokens[2]?.toLowerCase() === 'smiles') {
+      const description = tokens.slice(3).join(' ').trim()
+      const c = makeChain(name, description, true, type)
+      c.ligandFormat = 'smiles'
+      return c
+    }
     const description = tokens.slice(2).join(' ').trim()
     return makeChain(name, description, true, type)
   }
