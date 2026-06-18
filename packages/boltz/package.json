@@ -15,7 +15,7 @@
     "smoke:fasta": "tsx scripts/smoke_fasta.ts"
   },
   "dependencies": {
-    "@corundum/rdkit": "github:geoffitect/rdkit-js#boltz-blob-op",
+    "@corundum/rdkit": "git+https://github.com/geoffitect/rdkit-js.git#boltz-blob-op",
     "@tailwindcss/vite": "^4.3.0",
     "@types/three": "^0.184.1",
     "class-variance-authority": "^0.7.1",
