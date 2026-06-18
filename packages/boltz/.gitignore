@@ -1,0 +1,3 @@
+# RDKit WASM artifacts synced from the @corundum/rdkit package by
+# scripts/sync-rdkit.mjs (run on dev/build). Not source — do not commit.
+public/rdkit/

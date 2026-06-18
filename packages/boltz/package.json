@@ -6,14 +6,16 @@
   "description": "Browser-native Boltz-2 protein structure prediction. WebGPU + ONNX Runtime Web.",
   "license": "MIT",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build && rm -f dist/assets/*.wasm",
+    "sync:rdkit": "node scripts/sync-rdkit.mjs",
+    "dev": "npm run sync:rdkit && vite",
+    "build": "npm run sync:rdkit && tsc -b && vite build && rm -f dist/assets/*.wasm",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "smoke:featurizer": "tsx scripts/smoke_featurizer.ts",
     "smoke:fasta": "tsx scripts/smoke_fasta.ts"
   },
   "dependencies": {
+    "@corundum/rdkit": "github:geoffitect/rdkit-js#boltz-blob-op",
     "@tailwindcss/vite": "^4.3.0",
     "@types/three": "^0.184.1",
     "class-variance-authority": "^0.7.1",

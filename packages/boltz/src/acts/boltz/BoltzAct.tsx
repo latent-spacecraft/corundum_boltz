@@ -35,11 +35,8 @@ import { predict, type ProgressEvent } from './orchestrate'
 import { writeMmcif } from './mmcif'
 import { validateAgainstGolden, type ValidationReport } from './featurizer/validate'
 import { featurizeChains, parseFasta, type ParsedChain } from './featurizer'
-import {
-  loadLigandBlob,
-  loadLigandBlobFromSmiles,
-  type LigandBlob,
-} from './featurizer/ligand'
+import { loadLigandBlob, type LigandBlob } from './featurizer/ligand'
+import { loadLigandBlobFromSmiles } from './featurizer/ligandSmiles'
 import { renderLigandSvg } from './ligandSvg'
 import { useLigandInsertSlot, useLigandDrawer } from './LigandDrawer'
 
